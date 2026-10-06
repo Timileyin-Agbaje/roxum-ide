@@ -3217,7 +3217,8 @@ class SSHPrivateKey extends SSHInfo{
     name: jsonMap["name"],
     id: jsonMap["id"],
     url: jsonMap["url"],
-    termuxKeyLoc: File("$appDir/.termux/.ssh/id_ed25519"),
+    // A null path means the app's own key (SshKeygen.privateKeyFilelocation), used by remote servers.
+    termuxKeyLoc: jsonMap["termuxKeyLoc"] is String ? File(jsonMap["termuxKeyLoc"]) : null,
   );
 
   SSHClient? _client;

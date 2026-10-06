@@ -3748,8 +3748,46 @@ int main() {
                                                       ),
                                                                     
                                                       onPressed: () async {
+                                                        if(_isGeneratedKey ?? false){
+                                                          final confirmed = await showDialog<bool>(
+                                                            context: context,
+                                                            builder: (context) => AlertDialog(
+                                                              backgroundColor: appThemeState.appTheme.isDark ? appThemeState.appTheme.scaffoldBg : null,
+                                                              title: Text(
+                                                                'Replace SSH keys?',
+                                                                style: TextStyle(
+                                                                  color: appThemeState.appTheme.selectScreenCardTextColor,
+                                                                  fontSize: 20
+                                                                ),
+                                                              ),
+                                                              content: Text(
+                                                                "The current key will be overwritten. Every server that uses it, "
+                                                                "including your VM, will reject the app until you add the new public key there.",
+                                                                style: TextStyle(
+                                                                  color: appThemeState.appTheme.selectScreenCardTextColor.withAlpha(150),
+                                                                  fontSize: 16
+                                                                )
+                                                              ),
+                                                              actions: [
+                                                                ElevatedButton(
+                                                                  onPressed: () => Navigator.of(context).pop(false),
+                                                                  child: Text('Cancel')
+                                                                ),
+                                                                ElevatedButton(
+                                                                  onPressed: () => Navigator.of(context).pop(true),
+                                                                  style: ButtonStyle(
+                                                                    backgroundColor: WidgetStateProperty.all<Color>(Colors.red)
+                                                                  ),
+                                                                  child: Text('Replace', style: TextStyle(color: Colors.white))
+                                                                )
+                                                              ],
+                                                            )
+                                                          );
+                                                          if(confirmed != true || !mounted) return;
+                                                        }
                                                         setState(() => _isGeneratedKey = false);
                                                         await sshKeygen.generate();
+                                                        if(!mounted) return;
                                                         setState(() => _isGeneratedKey = true);
                                                       },
                                                                     
