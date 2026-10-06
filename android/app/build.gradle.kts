@@ -65,25 +65,7 @@ android {
 
     dynamicFeatures.addAll(
         setOf(
-            ":app:rust_feature",
-            ":app:zig_feature",
-            ":app:go_feature",
-            ":app:ruby_feature",
-            ":app:lua_feature",
             ":app:node_feature",
-            ":app:python_feature",
-            ":app:java_feature",
-            ":app:kotlin_feature",
-            ":app:clang_feature",
-            ":app:dart_feature",
-            ":app:ty_feature",
-            ":app:rust_analyzer_feature",
-            ":app:zls_feature",
-            ":app:gopls_feature",
-            ":app:emmylua_feature",
-            ":app:bash_language_server_feature",
-            ":app:copilot_language_server_feature",
-            ":app:kmp_lsp_feature",
             ":app:vscode_langservers_extracted_feature",
         )
     )

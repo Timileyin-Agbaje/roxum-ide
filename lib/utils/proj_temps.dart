@@ -182,36 +182,5 @@ List<ProjectTemplates> projTemps(BuildContext context) {
     command: "npm init -y && npm install -g create-vite@latest && node /data/data/com.roxum/runtimes/node/lib/node_modules/create-vite/dist/index.js"
   ),
 
-  CLITemplates(
-    context: context,
-    title: l10n.dartAppTemplateTitle,
-    subtitle: l10n.dartAppTemplateSubtitle,
-    appendProjectName: true,
-    openAfterCreate: true,
-    requirements: [
-      TemplateRequirement(
-        binaryPath: '$binDir/dart',
-        title: l10n.dartRuntime,
-      ),
-    ],
-    icon: SvgPicture.asset("assets/material_icons/dart.svg", width: 30, height: 30),
-    command: "dart create"
-  ),
-
-  CLITemplates(
-    context: context,
-    title: l10n.rustAppTemplateTitle,
-    subtitle: l10n.rustAppTemplateSubtitle,
-    appendProjectName: true,
-    openAfterCreate: true,
-    requirements: [
-      TemplateRequirement(
-        binaryPath: '$binDir/cargo',
-        title: l10n.rustRuntime,
-      ),
-    ],
-    icon: SvgPicture.asset("assets/material_icons/rust.svg", width: 30, height: 30),
-    command: "cargo new"
-  ),
   ];
 }

@@ -136,7 +136,7 @@ int main() {
     "OpenRouter",
     "FireWorks",
     "Custom",
-    "LocalLlama"
+    if (kLocalModelsEnabled) "LocalLlama"
   ];
 
   @override
@@ -5023,12 +5023,14 @@ int main() {
                             spacing: 10,
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
-                              BlocBuilder<CopilotBloc, CopilotState>(
-                                builder: (context, copilotState) {
-                                  return _buildCopilotButton(context, copilotState, appThemeState);
-                                },
-                              ),
-                              const SizedBox(height: 5),
+                              if (kCopilotEnabled) ...[
+                                BlocBuilder<CopilotBloc, CopilotState>(
+                                  builder: (context, copilotState) {
+                                    return _buildCopilotButton(context, copilotState, appThemeState);
+                                  },
+                                ),
+                                const SizedBox(height: 5),
+                              ],
                               SizedBox(
                                 width: 280,
                                 height: 45,
@@ -5383,6 +5385,7 @@ int main() {
                                 ),
                               ),
                               
+                              if (kLocalModelsEnabled) ...[
                               Padding(
                                 padding: const EdgeInsets.symmetric(vertical: 15),
                                 child: SizedBox(
@@ -5452,6 +5455,7 @@ int main() {
                                   )
                                 ),
                               ),
+                              ],
 
                               Padding(
                                 padding: const EdgeInsets.only(top: 15),

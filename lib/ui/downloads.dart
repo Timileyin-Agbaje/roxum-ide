@@ -38,7 +38,6 @@ class DownloadManager extends StatefulWidget {
 class _DownloadManagerState extends State<DownloadManager> {
   final Set<int> loadingIndexes = {};
   late final AppThemeState appThemeState;
-  late final Stream<Map<String, dynamic>> _pfdInstallEvents;
   Future<void> _pfdInstallChain = Future<void>.value();
   final Set<StreamSubscription<Map<String, dynamic>>> _activePfdSubscriptions = {};
 
@@ -324,7 +323,6 @@ class _DownloadManagerState extends State<DownloadManager> {
   @override
   void initState() {
     appThemeState = context.read<AppThemeBloc>().state;
-    _pfdInstallEvents = NativeChannel.moduleInstallEvents().asBroadcastStream();
     super.initState();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -766,73 +764,22 @@ class _DownloadManagerState extends State<DownloadManager> {
         return true;
       }
 
-      final completer = Completer<bool>();
-      final subscription = _pfdInstallEvents.listen(
-        (event) {
-          final moduleName = event['moduleName']?.toString();
-          if (moduleName != config.moduleName) return;
-
-          final status = event['status']?.toString().toLowerCase() ?? 'unknown';
-          final dynamic progressValue = event['progress'];
-          final double pfdProgress = progressValue is num ? progressValue.toDouble() : 0.0;
-          downloadBloc.updateProgress(
-            index,
-            _mergeProgress(0.0, pfdProgress) * (config.weight / 100.0),
-          );
-
-          if (status == 'installed') {
-            downloadBloc.updateProgress(index, config.weight);
-            if (!completer.isCompleted) {
-              completer.complete(true);
-            }
-            return;
-          }
-
-          if (status == 'failed' || status == 'canceled') {
-            if (!completer.isCompleted) {
-              completer.complete(false);
-            }
-          }
-        },
-        onError: (_) {
-          if (!completer.isCompleted) {
-            completer.complete(false);
-          }
-        },
-      );
-      _activePfdSubscriptions.add(subscription);
-
-      try {
-        await NativeChannel.installModule(config.moduleName);
-        final ok = await completer.future.timeout(
-          const Duration(minutes: 3),
-          onTimeout: () => false,
-        );
-        if (!ok && context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Failed to download ${config.displayName.toLowerCase()} feature module',
-              ),
-            ),
-          );
-        }
-        return ok;
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '${config.displayName} feature install error: $e',
-              ),
-            ),
-          );
-        }
-        return false;
-      } finally {
-        await subscription.cancel();
-        _activePfdSubscriptions.remove(subscription);
+      // This fork is sideloaded as a universal APK with every module fused in, so there is
+      // nothing to fetch from the Play Store. If Play Core does not report the module, rely
+      // on its bundled asset; staging it reports a clear error if it is missing.
+      final assetName = config.assetArchiveName;
+      if (assetName != null && assetName.isNotEmpty) {
+        downloadBloc.updateProgress(index, config.weight);
+        return true;
       }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${config.displayName} is not bundled in this build.'),
+          ),
+        );
+      }
+      return false;
     });
   }
 

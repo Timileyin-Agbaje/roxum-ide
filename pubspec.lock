@@ -670,15 +670,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "6.1.0"
-  llama_flutter_android:
-    dependency: "direct main"
-    description:
-      path: "."
-      ref: HEAD
-      resolved-ref: "5f0dd0a6d0cebc9220ddd934ee9b5900484b6236"
-      url: "https://github.com/heckmon/Llama-Flutter.git"
-    source: git
-    version: "0.2.3"
   logging:
     dependency: transitive
     description:

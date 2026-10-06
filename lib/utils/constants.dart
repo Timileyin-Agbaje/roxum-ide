@@ -10,3 +10,7 @@ const filesDir = "/storage/emulated/0/Android/media/com.roxum/Files";
 const tempDir = "$appDir/temps";
 const extensionDir = "$appDir/extensions";
 const homeDir = "$appDir/Home";
+
+// Features this fork removes. The code stays so upstream merges stay simple; these hide it.
+const kLocalModelsEnabled = false;
+const kCopilotEnabled = false;

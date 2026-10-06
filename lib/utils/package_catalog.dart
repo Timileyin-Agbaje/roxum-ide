@@ -26,6 +26,9 @@ class PackageCatalogSyncResult {
 }
 
 class PackageCatalogService {
+  // This fork bundles only the web toolchain: Node JS (with TypeScript) and the VSCode language servers.
+  static const Set<String> _keptPackages = {'node', 'vscode-langservers-extracted'};
+
   static final List<RunTime> _pfdRuntimes = [
     RunTime(
       name: 'Python',
@@ -141,7 +144,7 @@ class PackageCatalogService {
       parentName: 'lua',
       iconUrl: 'assets/material_icons/lua.svg',
     ),
-  ];
+  ].where((item) => _keptPackages.contains(item.parentName)).toList();
 
   static final List<Extension> _pfdExtensions = [
     Extension(
@@ -264,7 +267,7 @@ class PackageCatalogService {
       iconUrl: 'assets/icons/html-css.png',
       githubUrl: 'https://github.com/hrsh7th/vscode-langservers-extracted',
     ),
-  ];
+  ].where((item) => _keptPackages.contains(item.parentName)).toList();
 
   static Future<PackageCatalogSyncResult> syncOnStartup() async {
     final installed = await _loadInstalledCatalog();
