@@ -11,6 +11,48 @@ It combines editing, terminal workflows, Git/GitHub tooling, AI assistance, runt
 
 #### Roxum uses the powerful [code_forge](https://github.com/heckmon/code_forge) package as the editor engine.
 
+## This fork: run on a VM
+
+This fork's Play button can run JavaScript, TypeScript and React (Vite) projects on a Linux VM over SSH, while editing stays on the phone. It keeps only the web toolchain (Node.js with TypeScript, and the HTML/CSS/JSON language servers). Other runtimes, local GGUF models and Copilot are removed. It is installed as a sideloaded APK, not from the Play Store.
+
+### Install
+
+1. Back up your projects, then uninstall the Play Store version of Roxum (both use the package name `com.roxum`, and uninstalling deletes the app's data).
+2. Download the APK from the latest [release](../../releases/latest) and install it (allow "install unknown apps" for your browser).
+
+### Prepare the VM (one time)
+
+Install Node.js system-wide so it is on the `PATH` for SSH commands, plus `tsx` for running TypeScript files:
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm i -g tsx typescript
+node -v && tsx --version
+```
+
+### Connect
+
+1. In Roxum, open **Settings → Remote host and Termux** and tap **Generate keys**. Copy the public key.
+2. Add the public key to the VM. On Azure: **Reset password → Add SSH public key**, user `azureuser`.
+3. Add a remote host with the URL `ssh://azureuser@<vm-ip>:22` and connect.
+
+### Run
+
+- Open a project and pick the VM in the menu next to the Play button (the choice is remembered per project). Pick **Phone** to run on the device again.
+- **Play** syncs the project to `~/roxum/<project folder>` on the VM (only changed files; `node_modules`, `.git`, `dist`, `build`, `.vite`, `.next`, `coverage` and `*.log` are skipped), then:
+  - a project with a `dev` script runs `npm install` when needed and `npm run dev` (Vite on `127.0.0.1:5173`), and the preview opens in the app through an SSH tunnel;
+  - a `.ts`/`.tsx` file runs with `npx tsx`, a `.js`/`.mjs`/`.cjs` file with `node`;
+  - HTML and CSS files still preview on the phone.
+- **Stop** in the terminal sends Ctrl+C, then ends anything left of the run on the VM.
+- While a Vite dev server runs, saved files sync automatically so hot reload sees them. Turn this off with **Sync on save** in the same menu.
+- **Clean VM copy** in that menu deletes the project's folder on the VM. Nothing on the VM is deleted otherwise.
+- If the VM is stopped, Play offers **Run on phone instead**.
+
+### Build
+
+`.github/workflows/build-apk.yml` builds a signed universal APK on every push to `playstore-version` (or manually) and publishes it as a GitHub Release. It needs four repository secrets: `KEYSTORE_BASE64` (the keystore, base64-encoded), `KEYSTORE_PASSWORD`, `KEY_ALIAS` and `KEY_PASSWORD`. Every build must use the same keystore, or the APK will not install over the previous one.
+
 <a href="https://play.google.com/store/apps/details?id=com.roxum">
   <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="60">
 </a>
