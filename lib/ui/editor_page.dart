@@ -20,6 +20,7 @@ import '../terminal/terminal.dart';
 import '../utils/languages.dart';
 import '../utils/functions.dart';
 import '../utils/themes.dart';
+import '../utils/vm_run.dart';
 import 'widgets.dart';
 
 class DiagnosticsTickBloc extends Cubit<int> {
@@ -71,6 +72,9 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
   int _vitePort = 5173;
   Process? _vitePreviewProcess;
   AnimationStatus _terminalSelectionStatus = .dismissed, _runtimeSelectionStatus = .dismissed;
+  late final VmSession _vmSession = VmSession(widget.rootDir);
+  bool _vmSyncOnSave = true;
+  int _vmRunCount = 0;
 
   @override
   void initState() {
@@ -102,6 +106,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
     );
     _initializeCopilotForEditorIfEnabled();
     _loadVitePreviewInfo();
+    _restoreRunTarget();
   }
 
   Future<void> _loadVitePreviewInfo() async {
@@ -254,9 +259,267 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
     return null;
   }
 
+  Future<void> _restoreRunTarget() async {
+    final saved = await RunTargetStore.load(widget.rootDir);
+    final syncOnSave = await RunTargetStore.loadSyncOnSave();
+    if (!mounted) return;
+    final isKnownTarget = saved != null &&
+        (_vmServerFor(saved) != null ||
+            (termuxInfo != null && termuxInfo!.id == saved && termuxInfo!.isConnected));
+    setState(() => _vmSyncOnSave = syncOnSave);
+    context.read<SelectedRuntimeEnvironmentCubit>().updateId(isKnownTarget ? saved : null);
+  }
+
+  void _selectRunTarget(int? id) {
+    context.read<SelectedRuntimeEnvironmentCubit>().updateId(id);
+    RunTargetStore.save(widget.rootDir, id);
+  }
+
+  SSHInfo? _vmServerFor(int? id) {
+    if (id == null) return null;
+    for (final server in context.read<SSHServersCubit>().state.serverList) {
+      if (server.id == id) return server;
+    }
+    return null;
+  }
+
+  Future<_VmConnectResult> _connectVm(SSHInfo server) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: Row(
+            children: [
+              const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2.2),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Connecting to ${server.name}…')),
+            ],
+          ),
+        ),
+      ),
+    );
+    final (connected, message) = await ensureVmConnected(server);
+    if (!mounted) return _VmConnectResult.cancelled;
+    Navigator.of(context, rootNavigator: true).pop();
+    if (connected) {
+      await context.read<SSHServersCubit>().updateServer(server);
+      return _VmConnectResult.connected;
+    }
+    if (!mounted) return _VmConnectResult.cancelled;
+    final runOnPhone = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('VM unreachable'),
+        content: Text(
+          'Could not connect to ${server.name}. Start it in the Azure app, then try again.\n\n$message',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Run on phone instead'),
+          ),
+        ],
+      ),
+    );
+    return runOnPhone == true ? _VmConnectResult.runOnPhone : _VmConnectResult.cancelled;
+  }
+
+  /// Syncs the project to [server] and runs [file] there in an SSH terminal.
+  /// Returns false when the file should run on the phone instead.
+  Future<bool> _runOnVm(SSHInfo server, File file) async {
+    final plan = await VmRunPlan.forFile(widget.rootDir, file.path);
+    if (plan == null || !mounted) return plan != null;
+
+    switch (await _connectVm(server)) {
+      case _VmConnectResult.connected:
+        break;
+      case _VmConnectResult.cancelled:
+        return true;
+      case _VmConnectResult.runOnPhone:
+        return false;
+    }
+
+    final runId = ++_vmRunCount;
+    final sync = _vmSession.syncFor(server);
+    try {
+      await _vmSession.sync(server);
+      await _vmSession.stopDevServerTunnel();
+      // End an earlier run of this project so the dev server port is free.
+      await server.client!.run(sync.stopCommand);
+      final command = await sync.prepareRunCommand(plan.body);
+      if (!mounted) return true;
+      Navigator.of(context).push(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) => SetupTerminal(
+            projectDir: widget.rootDir,
+            sshId: server.id,
+            commandToExecuteInSSH: command,
+            remoteStopCommand: sync.stopCommand,
+            isRun: true,
+          ),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return SizeTransition(sizeFactor: animation, child: child);
+          },
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not run on ${server.name}: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return true;
+    }
+
+    if (plan.isViteDevServer) {
+      final url = await _vmSession.startDevServerTunnel(server, syncOnSave: _vmSyncOnSave);
+      if (!mounted || runId != _vmRunCount) return true;
+      if (url == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('The dev server on ${server.name} did not start. Check the terminal output.'),
+          ),
+        );
+        return true;
+      }
+      Navigator.of(context).push(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              WebViewScreen(streamUrl: url),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return SizeTransition(sizeFactor: animation, child: child);
+          },
+        ),
+      );
+    }
+    return true;
+  }
+
+  Future<void> _cleanVmCopy(SSHInfo server) async {
+    final sync = _vmSession.syncFor(server);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Clean VM copy?'),
+        content: Text(
+          'This stops any run of this project on ${server.name} and deletes ~/${sync.remoteRelativeDir} there, '
+          'including node_modules. The next run uploads everything again. Files on this phone are not touched.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: ButtonStyle(backgroundColor: WidgetStateProperty.all<Color>(Colors.red)),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    if (await _connectVm(server) != _VmConnectResult.connected) return;
+    try {
+      await _vmSession.stopDevServerTunnel();
+      await sync.clean();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deleted ~/${sync.remoteRelativeDir} on ${server.name}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not clean the VM copy: $e'), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  Widget _buildVmStatusLine(AppTheme appTheme) {
+    return ValueListenableBuilder<VmStatus?>(
+      valueListenable: _vmSession.status,
+      builder: (context, status, _) {
+        if (status == null) return const SizedBox.shrink();
+        return Material(
+          color: appTheme.editorPageToolbarBg,
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (status.progress != null)
+                  LinearProgressIndicator(value: status.progress, minHeight: 2),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  child: Row(
+                    children: [
+                      Icon(
+                        status.isError ? Icons.error_outline : Icons.cloud_sync_outlined,
+                        size: 14,
+                        color: status.isError ? Colors.red : appTheme.editorPageToolColor,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          status.message,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: status.isError ? Colors.red : appTheme.selectScreenCardTextColor,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _openVitePreview() async {
     final l10n = AppLocalizations.of(context)!;
     if (_isOpeningVitePreview || !mounted) return;
+
+    final vmServer = _vmServerFor(
+      context.read<SelectedRuntimeEnvironmentCubit>().state.currentlyRuntimeID,
+    );
+    if (vmServer != null) {
+      final url = _vmSession.previewUrl;
+      if (url == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Press Play to start the dev server on ${vmServer.name}.')),
+        );
+        return;
+      }
+      Navigator.of(context).push(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              WebViewScreen(streamUrl: url),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return SizeTransition(sizeFactor: animation, child: child);
+          },
+        ),
+      );
+      return;
+    }
     setState(() => _isOpeningVitePreview = true);
 
     showDialog<void>(
@@ -585,6 +848,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _vmSession.dispose();
     for (final entry in _editorListeners.entries) {
       entry.key.removeListener(entry.value);
     }
@@ -1516,6 +1780,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
 
     try {
       editor.controller.saveFile();
+      VmSaveEvents.notifySaved(editor.file.path);
       _savedSnapshotByController[editor.controller] = editor.controller.text;
       _dirtyControllers.remove(editor.controller);
       if (mounted) {
@@ -1945,6 +2210,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                   },
                   child: Scaffold(
                     resizeToAvoidBottomInset: true,
+                    bottomNavigationBar: _buildVmStatusLine(appTheme),
                     drawer: BlocBuilder<StackBloc, StackState>(
                       buildWhen: (previous, current) => current != previous,
                       builder: (context, state) {
@@ -2731,8 +2997,9 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                           ),
                         BlocBuilder<SelectedRuntimeEnvironmentCubit, SelectedRunEnvironmentState>(
                           builder: (context, runtimeState) {
-                            final cubitState = context.read<SelectedRuntimeEnvironmentCubit>();
                             final currentlyRuntimeID = runtimeState.currentlyRuntimeID;
+                            final vmServers = context.watch<SSHServersCubit>().state.serverList;
+                            final selectedVm = _vmServerFor(currentlyRuntimeID);
                           return Padding(
                             padding: const EdgeInsets.only(right: 7),
                             child: Row(
@@ -2740,7 +3007,19 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                                 InkWell(
                                   onTap: () async {
                                     if (editorState.activeEditors.isEmpty) return;
-                                    if (currentlyRuntimeID != null) {
+                                    var runOnPhone = false;
+                                    final vmServer = _vmServerFor(currentlyRuntimeID);
+                                    if (vmServer != null) {
+                                      final activeEditorForRun = tabController != null && tabController!.index < editorState.activeEditors.length
+                                        ? editorState.activeEditors[tabController!.index]
+                                        : editorState.activeEditors.firstWhere(
+                                            (item) => item.isActive == true,
+                                            orElse: () => editorState.activeEditors.first,
+                                          );
+                                      runOnPhone = !await _runOnVm(vmServer, activeEditorForRun.file);
+                                      if (!runOnPhone || !context.mounted) return;
+                                    }
+                                    if (currentlyRuntimeID != null && !runOnPhone) {
                                       final activeEditorForRun = tabController != null && tabController!.index < editorState.activeEditors.length
                                       ? editorState.activeEditors[tabController!.index]
                                       : editorState.activeEditors.firstWhere(
@@ -2972,6 +3251,21 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                                   },
                                   child: runtimeState.currentlyRuntimeID == null
                                     ? Icon(Icons.play_arrow)
+                                    : selectedVm != null
+                                    ? Stack(
+                                      children: [
+                                        Icon(Icons.play_arrow),
+                                        Positioned(
+                                          bottom: 0,
+                                          right: 0,
+                                          child: Icon(
+                                            Icons.cloud,
+                                            size: 12,
+                                            color: appTheme.selectScreenCardTextColor,
+                                          ),
+                                        ),
+                                      ],
+                                    )
                                     : Stack(
                                       children: [
                                         Icon(Icons.play_arrow),
@@ -2994,7 +3288,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                                       ],
                                     ),
                                 ),
-                                if (termuxInfo != null && termuxInfo!.isConnected) 
+                                if ((termuxInfo != null && termuxInfo!.isConnected) || vmServers.isNotEmpty)
                                   MenuAnchor(
                                     style: MenuStyle(
                                       backgroundColor: WidgetStatePropertyAll(appTheme.selectScreenCardsBg),
@@ -3006,7 +3300,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                                     },
                                     menuChildren: [
                                       MenuItemButton(
-                                        onPressed: () => cubitState.updateId(null),
+                                        onPressed: () => _selectRunTarget(null),
                                         leadingIcon: Icon(
                                           Icons.phone_android_outlined,
                                           color: appTheme.selectScreenCardTextColor,
@@ -3018,15 +3312,16 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                                           )
                                           : null,
                                         child: Text(
-                                          "Roxum",
+                                          "Phone",
                                           style: TextStyle(
                                             color: appTheme.selectScreenCardTextColor
                                           )
                                         ),
                                       ),
                                       
+                                      if (termuxInfo != null && termuxInfo!.isConnected)
                                       MenuItemButton(
-                                        onPressed: () => cubitState.updateId(termuxInfo!.id),
+                                        onPressed: () => _selectRunTarget(termuxInfo!.id),
                                         leadingIcon: SvgPicture.asset(
                                           "assets/icons/Termux.svg",
                                           height: 20,
@@ -3046,12 +3341,9 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                                         ),
                                       ),
 
-                                      //TODO
-                                      Opacity(
-                                        opacity: 0.45,
-                                        child: MenuItemButton(
-                                          onPressed: null,
-
+                                      ...vmServers.map((server) {
+                                        return MenuItemButton(
+                                          onPressed: () => _selectRunTarget(server.id),
                                           leadingIcon: Padding(
                                             padding: const EdgeInsets.only(left: 3),
                                             child: FaIcon(
@@ -3060,39 +3352,55 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                                               size: 20,
                                             ),
                                           ),
-
-                                          child: Row(
-                                            children: [
-                                              Text(
-                                                "Remote server",
-                                                style: TextStyle(
-                                                  color: appTheme.selectScreenCardTextColor,
-                                                ),
-                                              ),
-
-                                              const SizedBox(width: 8),
-
-                                              Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                  horizontal: 6,
-                                                  vertical: 2,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.grey.withAlpha(40),
-                                                  borderRadius: BorderRadius.circular(6),
-                                                ),
-                                                child: const Text(
-                                                  "Coming Soon",
-                                                  style: TextStyle(
-                                                    fontSize: 10,
-                                                    color: Colors.grey,
-                                                  ),
-                                                ),
-                                              )
-                                            ],
+                                          trailingIcon: currentlyRuntimeID == server.id ? Icon(
+                                              Icons.check_circle,
+                                              color: Colors.green,
+                                              size: 16
+                                            )
+                                            : null,
+                                          child: Text(
+                                            server.name,
+                                            style: TextStyle(
+                                              color: appTheme.selectScreenCardTextColor,
+                                            ),
+                                          ),
+                                        );
+                                      }),
+                                      if (selectedVm != null) ...[
+                                        const Divider(height: 1),
+                                        MenuItemButton(
+                                          closeOnActivate: false,
+                                          onPressed: () {
+                                            setState(() => _vmSyncOnSave = !_vmSyncOnSave);
+                                            RunTargetStore.saveSyncOnSave(_vmSyncOnSave);
+                                          },
+                                          leadingIcon: Icon(
+                                            _vmSyncOnSave ? Icons.check_box : Icons.check_box_outline_blank,
+                                            color: appTheme.selectScreenCardTextColor,
+                                            size: 20,
+                                          ),
+                                          child: Text(
+                                            "Sync on save",
+                                            style: TextStyle(
+                                              color: appTheme.selectScreenCardTextColor,
+                                            ),
                                           ),
                                         ),
-                                      )
+                                        MenuItemButton(
+                                          onPressed: () => _cleanVmCopy(selectedVm),
+                                          leadingIcon: Icon(
+                                            Icons.cleaning_services_outlined,
+                                            color: appTheme.selectScreenCardTextColor,
+                                            size: 20,
+                                          ),
+                                          child: Text(
+                                            "Clean VM copy",
+                                            style: TextStyle(
+                                              color: appTheme.selectScreenCardTextColor,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ],
                                     builder: (context, controller, child) => InkWell(
                                       onTap: () {
@@ -3574,3 +3882,5 @@ class _PdfPreviewPaneState extends State<_PdfPreviewPane> {
     );
   }
 }
+
+enum _VmConnectResult { connected, cancelled, runOnPhone }

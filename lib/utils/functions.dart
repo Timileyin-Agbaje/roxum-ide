@@ -3171,7 +3171,7 @@ class SSHLogin extends SSHInfo{
   Future<(bool, String)> connect() async{
     try {
       _client = SSHClient(
-        await SSHSocket.connect(host, port),
+        await SSHSocket.connect(host, port, timeout: const Duration(seconds: 15)),
         username: username,
         onPasswordRequest: () => password,
       );
@@ -3237,7 +3237,7 @@ class SSHPrivateKey extends SSHInfo{
   Future<(bool, String)> connect() async{
     try {
       _client = SSHClient(
-        await SSHSocket.connect(host, port),
+        await SSHSocket.connect(host, port, timeout: const Duration(seconds: 15)),
         username: username,
         identities: [
           ...SSHKeyPair.fromPem(await (termuxKeyLoc ?? SshKeygen.privateKeyFilelocation).readAsString())

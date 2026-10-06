@@ -23,6 +23,8 @@ class SetupTerminal extends StatefulWidget {
   final bool isRun;
   final int? sshId, termuxId;
   final String? commandToExecuteInSSH;
+  /// Run on the SSH server a few seconds after Stop sends Ctrl+C, to end what Ctrl+C missed.
+  final String? remoteStopCommand;
 
   const SetupTerminal({
     super.key,
@@ -34,7 +36,8 @@ class SetupTerminal extends StatefulWidget {
     this.isRun = false,
     this.sshId,
     this.termuxId,
-    this.commandToExecuteInSSH
+    this.commandToExecuteInSSH,
+    this.remoteStopCommand,
   });
 
   @override
@@ -232,6 +235,8 @@ class TerminalRuntime {
 
   Pty? pty;
   SSHSession? sshSession;
+  SSHClient? sshClient;
+  String? sshStopCommand;
   String currentInput = '';
   VoidCallback? selectionListener;
 
@@ -249,7 +254,18 @@ class TerminalRuntime {
 
   void stopProcess() {
     if(sshSession != null){
-      sshSession!.kill(SSHSignal.KILL);
+      // Interrupt the foreground program; the remote shell stays open.
+      sshSession!.write(utf8.encode('\x03'));
+      final client = sshClient;
+      final stopCommand = sshStopCommand;
+      if (client != null && stopCommand != null) {
+        Future.delayed(const Duration(seconds: 3), () async {
+          if (client.isClosed) return;
+          try {
+            await client.run(stopCommand);
+          } catch (_) {}
+        });
+      }
     }
     if (pty != null) {
       try {
@@ -267,6 +283,7 @@ class TerminalRuntime {
 
   Future<void> dispose() async {
     stopProcess();
+    sshSession?.close();
     if (selectionListener != null) {
       controller.removeListener(selectionListener!);
     }
@@ -469,6 +486,8 @@ class _SetupTerminalState extends State<SetupTerminal> {
     final runtime = TerminalRuntimeRegistry.instance.get(sessionId)!;
     if (!runtime.isRunning) return;
     runtime.stopProcess();
+    // An SSH shell outlives the interrupted program; its status changes when the shell ends.
+    if (runtime.sshSession != null) return;
     _sessionBloc.add(
       UpdateTerminalSessionStatus(id: sessionId, isRunning: false),
     );
@@ -590,6 +609,11 @@ class _SetupTerminalState extends State<SetupTerminal> {
       );
 
       runtime.sshSession = session;
+      runtime.sshClient = externalServer.client;
+      runtime.sshStopCommand = widget.remoteStopCommand;
+      _sessionBloc.add(
+        UpdateTerminalSessionStatus(id: runtime.sessionId, isRunning: true),
+      );
 
       terminal.buffer.clear();
       terminal.buffer.setCursor(0, 0);
@@ -620,6 +644,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
         .listen(terminal.write);
 
       session.done.then((_) {
+        if (identical(runtime.sshSession, session)) runtime.sshSession = null;
         if (!sessionRuntimes.containsKey(runtime.sessionId)) return;
         runtime.terminal.write('\r\n\n[Program finished with exit code ${session.exitCode}]');
         _sessionBloc.add(

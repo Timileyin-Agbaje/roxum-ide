@@ -11,6 +11,7 @@ import 'package:flutter_json/flutter_json.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:http/http.dart' as http;
 import '../utils/local_llama_stub.dart';
+import '../utils/vm_run.dart';
 import 'package:markdown_widget/config/configs.dart';
 import 'package:markdown_widget/widget/all.dart';
 import 'package:path/path.dart' as path;
@@ -406,6 +407,7 @@ class _CodeEditorState extends State<CodeEditor> with AutomaticKeepAliveClientMi
         _saveTimer = Timer(const Duration(milliseconds: 85), () {
           try {
             controller.saveFile();
+            VmSaveEvents.notifySaved(widget.filePath.path);
           } catch (_) {}
           _statusRefreshTimer?.cancel();
           _statusRefreshTimer = Timer(const Duration(milliseconds: 400), () {
