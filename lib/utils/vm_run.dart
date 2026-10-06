@@ -181,8 +181,13 @@ class VmProjectSync {
     known.add(dir);
   }
 
-  /// Uploads changed files. [onProgress] receives (done, total) for files that need uploading.
-  Future<VmSyncResult> sync({void Function(int done, int total)? onProgress}) async {
+  /// Uploads changed files, plus the absolute paths in [force] (just-saved files, in case
+  /// a quick edit kept the same size and timestamp). [onProgress] receives (done, total)
+  /// for files that need uploading.
+  Future<VmSyncResult> sync({
+    Set<String> force = const {},
+    void Function(int done, int total)? onProgress,
+  }) async {
     final client = server.client;
     if (client == null || client.isClosed) {
       throw Exception('Not connected to ${server.name}');
@@ -202,9 +207,11 @@ class VmProjectSync {
         manifest = {};
       }
 
+      final forced = force.map((file) => path.relative(file, from: rootDir)).toSet();
       final changed = local.entries.where((entry) {
         final previous = manifest[entry.key];
-        return previous == null ||
+        return forced.contains(entry.key) ||
+            previous == null ||
             previous[0] != entry.value[0] ||
             previous[1] != entry.value[1];
       }).toList();
@@ -233,7 +240,7 @@ class VmProjectSync {
                 SftpFileOpenMode.write,
           );
           try {
-            await file.writeBytes(Uint8List.fromList(bytes));
+            await file.writeBytes(bytes);
           } finally {
             await file.close();
           }
@@ -307,7 +314,7 @@ $body
             SftpFileOpenMode.write,
       );
       try {
-        await file.writeBytes(Uint8List.fromList(utf8.encode(script)));
+        await file.writeBytes(utf8.encode(script));
       } finally {
         await file.close();
       }
@@ -465,6 +472,7 @@ class VmSession {
   StreamSubscription<String>? _saveSubscription;
   Timer? _saveDebounce, _watchTimer, _statusClear;
   Future<void> _syncChain = Future.value();
+  final Set<String> _savedSinceSync = {};
   bool _disposed = false;
 
   VmSession(this.rootDir);
@@ -492,12 +500,13 @@ class VmSession {
   }
 
   /// Uploads changed files, reporting progress in [status]. Syncs are serialized.
-  Future<VmSyncResult> sync(SSHInfo server, {bool quiet = false}) {
+  Future<VmSyncResult> sync(SSHInfo server, {bool quiet = false, Set<String> force = const {}}) {
     final completer = Completer<VmSyncResult>();
     _syncChain = _syncChain.catchError((_) {}).then((_) async {
       try {
         if (!quiet) _setStatus(VmStatus('Syncing to ${server.name}…', progress: 0));
         final result = await syncFor(server).sync(
+          force: force,
           onProgress: (done, total) {
             if (total == 0) return;
             if (quiet && done == 0) {
@@ -558,10 +567,14 @@ class VmSession {
     if (syncOnSave) {
       _saveSubscription = VmSaveEvents.stream
           .where((file) => path.isWithin(rootDir, file))
-          .listen((_) {
+          .listen((file) {
+        _savedSinceSync.add(file);
         _saveDebounce?.cancel();
         _saveDebounce = Timer(const Duration(milliseconds: 300), () {
-          sync(server, quiet: true).catchError((_) => const VmSyncResult(uploaded: 0, unchanged: 0));
+          final saved = Set<String>.of(_savedSinceSync);
+          _savedSinceSync.clear();
+          sync(server, quiet: true, force: saved)
+              .catchError((_) => const VmSyncResult(uploaded: 0, unchanged: 0));
         });
       });
     }
