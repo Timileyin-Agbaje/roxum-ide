@@ -64,6 +64,7 @@ flutter:
     - assets/webview/
     - assets/fonts/
     - assets/certificates/
+    - assets/themes/
   fonts:
     - family: firaCode
       fonts:
