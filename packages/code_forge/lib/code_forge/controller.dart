@@ -627,7 +627,7 @@ class CodeForgeController implements DeltaTextInputClient {
     }
     final indented = _indentContinuationLines(insertText, stops, start);
     replaceRange(start, end, indented.text);
-    _startSnippet(indented.stops, start);
+    _startSnippet(indented.stops, start, start + indented.text.length);
 
     completionRecency.record(lspConfig?.languageId ?? '', suggestion.label);
     unawaited(_applyAdditionalEdits(suggestion, start));
@@ -655,8 +655,7 @@ class CodeForgeController implements DeltaTextInputClient {
     );
   }
 
-  void _startSnippet(List<SnippetStop> stops, int insertStart) {
-    final insertEnd = selection.extentOffset;
+  void _startSnippet(List<SnippetStop> stops, int insertStart, int insertEnd) {
     _snippetRange = (
       startFromEnd: length - insertStart,
       endFromEnd: length - insertEnd,
