@@ -2109,7 +2109,28 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
                                 );
                               }
                             ),
-                          )
+                          ),
+                          Tooltip(
+                            message: "soft wrap",
+                            child: BlocBuilder<ConfigBloc, ConfigState>(
+                              builder: (context, configState) {
+                                final wrapOn = (configState.codeForgeConfig['lineWrap'] ?? false) as bool;
+                                return DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: wrapOn ? appTheme.editorPageToolSelectedBgColor : null,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: bottomTool(appTheme.isDark, Icons.wrap_text, () async {
+                                    final config = Map<String, dynamic>.from(configState.codeForgeConfig)
+                                      ..['lineWrap'] = !wrapOn;
+                                    context.read<ConfigBloc>().add(ChangeConfigEvent(config));
+                                    final prefs = await SharedPreferences.getInstance();
+                                    await prefs.setString("codeForgeConfig", jsonEncode(config));
+                                  }),
+                                );
+                              },
+                            ),
+                          ),
                         ],
                       )
                     ],
