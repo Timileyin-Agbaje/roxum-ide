@@ -3092,6 +3092,38 @@ int main() {
                           }
                         ),
                       ),
+                      settingsTile(
+                        null,
+                        "Show completion timing",
+                        Icon(
+                          Icons.timer_outlined,
+                          color:  appThemeState.appTheme.selectScreenCardTextColor,
+                          size: 19
+                        ),
+                        appThemeState.appTheme.isDark,
+                        trailing: FlutterSwitch(
+                          borderRadius: 5,
+                          width: 65,
+                          height: 26,
+                          toggleSize: 32,
+                          toggleColor: Color(0xff007ACC),
+                          inactiveToggleColor: Colors.white,
+                          activeColor: appThemeState.appTheme.isDark ? Color(0xff303030) : Color(0xffb0c6fe),
+                          activeIcon: Text("On", style: TextStyle(color: Colors.white)),
+                          inactiveIcon: Text("Off", style: TextStyle(color: Colors.grey)),
+                          toggleShape: BoxShape.rectangle,
+                          toggleBorderRadius: .circular(4),
+                          padding: 2,
+                          value: (configState.codeForgeConfig['showCompletionTiming'] ?? false) as bool,
+                          onToggle: (value) async{
+                            final prefs = await SharedPreferences.getInstance();
+                            final currentState = configState.codeForgeConfig;
+                            currentState['showCompletionTiming'] = value;
+                            if(context.mounted) context.read<ConfigBloc>().add(ChangeConfigEvent(currentState));
+                            prefs.setString("codeForgeConfig", jsonEncode(currentState));
+                          }
+                        ),
+                      ),
                       const SizedBox(height: 25),
                       Align(
                         alignment: Alignment.center,

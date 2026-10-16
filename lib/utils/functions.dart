@@ -1648,6 +1648,7 @@ Future<String> getCodeForgeConfig() async {
     "indentLineStatus": true,
     "lineWrap": false,
     "enableFolding": true,
+    "showCompletionTiming": false,
     "theme": cursorDarkThemeId,
     "terminalTheme": cursorDarkThemeId,
     "fontFamily": "jetBrainsMono",
