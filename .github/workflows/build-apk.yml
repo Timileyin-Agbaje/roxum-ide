@@ -7,6 +7,12 @@ on:
     paths-ignore:
       - '**.md'
       - 'LICENCE'
+  # PRs get an APK artifact to test on the phone, but no Release.
+  pull_request:
+    branches: [playstore-version]
+    paths-ignore:
+      - '**.md'
+      - 'LICENCE'
 
 permissions:
   contents: write
@@ -63,6 +69,12 @@ jobs:
       - name: Get packages
         run: flutter pub get --enforce-lockfile
 
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
       - name: Write signing config
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -116,6 +128,7 @@ jobs:
           retention-days: 14
 
       - name: Publish release
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
