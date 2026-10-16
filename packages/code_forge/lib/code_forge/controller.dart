@@ -383,6 +383,13 @@ class CodeForgeController implements DeltaTextInputClient {
           currentText.length == _previousValue.length - 1 &&
           currentSelection.extentOffset == _prevSelection.extentOffset - 1;
 
+      if (grewBy == 1 &&
+          cursor == _prevSelection.extentOffset + 1 &&
+          currentText[cursor - 1] == '>' &&
+          _isMarkupFile) {
+        scheduleMicrotask(() => _autoCloseTag(cursor));
+      }
+
       // Completions are handled right away; only the heavier refreshes below
       // wait for typing to pause.
       if (isTypingLenMatch) {
@@ -417,6 +424,26 @@ class CodeForgeController implements DeltaTextInputClient {
     }
     _previousValue = text;
     _prevSelection = selection;
+  }
+
+  bool get _isMarkupFile {
+    final file = openedFile?.toLowerCase() ?? '';
+    return file.endsWith('.tsx') ||
+        file.endsWith('.jsx') ||
+        file.endsWith('.html') ||
+        file.endsWith('.htm');
+  }
+
+  /// After `>` closes an opening tag, adds its closing tag after the cursor.
+  void _autoCloseTag(int cursor) {
+    if (_isDisposed || readOnly || selection.extentOffset != cursor) return;
+    if (cursor > length) return;
+    final line = getLineAtOffset(cursor);
+    final column = cursor - getLineStartOffset(line);
+    final closing = closingTagFor(getLineText(line).substring(0, column));
+    if (closing == null) return;
+    replaceRange(cursor, cursor, closing, preserveOldCursor: true);
+    selection = TextSelection.collapsed(offset: cursor);
   }
 
   bool _isAutoClosedPair(String text, int cursor) {
