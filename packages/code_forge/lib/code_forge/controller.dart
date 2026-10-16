@@ -102,8 +102,29 @@ class CodeForgeController implements DeltaTextInputClient {
   GhostText? _ghostText;
   Map<int, FoldRange>? _lspFoldRanges;
   String? _activeCompletionKey;
-  ({String filePath, String prefix, int line, int character})?
+  ({
+    String filePath,
+    String prefix,
+    int line,
+    int character,
+    String? triggerCharacter,
+  })?
   _queuedCompletionRequest;
+
+  /// The server's list for the word being typed. While the same word grows,
+  /// it is filtered here instead of asking the server again.
+  ({
+    String filePath,
+    int line,
+    int wordStart,
+    bool isIncomplete,
+    List<LspCompletion> items,
+  })?
+  _completionSession;
+
+  /// How long the last completion request took, from the keystroke to the
+  /// list being ready. For an optional on-screen readout.
+  final ValueNotifier<Duration?> completionLatency = ValueNotifier(null);
 
   CodeForgeController({this.lspConfig}) {
     if (lspConfig != null) {
@@ -335,6 +356,19 @@ class CodeForgeController implements DeltaTextInputClient {
           currentText.length == _previousValue.length + 1 &&
           currentSelection.extentOffset == _prevSelection.extentOffset + 1 &&
           _isTyping;
+      final isBackspace =
+          currentText.length == _previousValue.length - 1 &&
+          currentSelection.extentOffset == _prevSelection.extentOffset - 1;
+
+      // Completions are handled right away; only the heavier refreshes below
+      // wait for typing to pause.
+      if (isTypingLenMatch) {
+        _onCharacterTyped(currentText, currentSelection.extentOffset);
+      } else if (!(isBackspace &&
+          _refilterCompletions(currentText, currentSelection.extentOffset))) {
+        _completionSession = null;
+        if (!_isDisposed) suggestionsNotifier.value = null;
+      }
 
       _lspTypingTimer?.cancel();
       _lspTypingTimer = Timer(_lspTypingDebounce, () async {
@@ -356,34 +390,74 @@ class CodeForgeController implements DeltaTextInputClient {
 
         _scheduleDocumentColorRefresh();
         _scheduleFoldRangesRefresh();
-
-        if (isTypingLenMatch) {
-          final cursorPosition = currentSelection.extentOffset;
-          final line = getLineAtOffset(cursorPosition);
-          final lineStartOffset = getLineStartOffset(line);
-          if (cursorPosition - 1 >= currentText.length) return;
-          final character = cursorPosition - lineStartOffset;
-          final prefix = getCurrentWordPrefix(currentText, cursorPosition);
-          final triggerChar = currentText[cursorPosition - 1];
-          final isTriggerChar = _isCompletionTriggerChar(triggerChar);
-          final isAlphaChar = _isAlpha(triggerChar);
-
-          if ((isTriggerChar || isAlphaChar) && !_isDisposed) {
-            _requestCompletions(
-              prefix: prefix,
-              line: line,
-              character: character,
-            );
-          } else {
-            if (!_isDisposed) suggestionsNotifier.value = null;
-          }
-        } else {
-          if (!_isDisposed) suggestionsNotifier.value = null;
-        }
       });
     }
     _previousValue = text;
     _prevSelection = selection;
+  }
+
+  void _onCharacterTyped(String currentText, int cursorPosition) {
+    if (_isDisposed || cursorPosition <= 0) return;
+    if (cursorPosition > currentText.length) return;
+    final line = getLineAtOffset(cursorPosition);
+    final character = cursorPosition - getLineStartOffset(line);
+    final typed = currentText[cursorPosition - 1];
+    final prefix = getCurrentWordPrefix(currentText, cursorPosition);
+
+    if (_isCompletionTriggerChar(typed)) {
+      _completionSession = null;
+      _requestCompletions(
+        prefix: '',
+        line: line,
+        character: character,
+        triggerCharacter: typed,
+      );
+    } else if (prefix.isNotEmpty && _isIdentChar(typed.codeUnitAt(0))) {
+      if (!_refilterCompletions(currentText, cursorPosition)) {
+        _requestCompletions(prefix: prefix, line: line, character: character);
+      }
+    } else {
+      _completionSession = null;
+      suggestionsNotifier.value = null;
+    }
+  }
+
+  /// Re-filters the current list when the cursor is still in the word it was
+  /// fetched for. Returns false when the server has to be asked again.
+  bool _refilterCompletions(String currentText, int cursorPosition) {
+    final session = _completionSession;
+    if (session == null ||
+        session.isIncomplete ||
+        session.filePath != openedFile) {
+      return false;
+    }
+    final line = getLineAtOffset(cursorPosition);
+    final character = cursorPosition - getLineStartOffset(line);
+    final prefix = getCurrentWordPrefix(currentText, cursorPosition);
+    if (prefix.isEmpty ||
+        line != session.line ||
+        character - prefix.length != session.wordStart) {
+      return false;
+    }
+    _showCompletions(session.items, prefix);
+    return true;
+  }
+
+  void _showCompletions(List<LspCompletion> items, String prefix) {
+    _suggestions = <dynamic>[
+      for (final item in items)
+        if (prefix.isEmpty || _matchesPrefix(item, prefix)) item,
+    ];
+    _sortSuggestions(prefix);
+    if (!_isDisposed) {
+      suggestionsNotifier.value = _suggestions.isEmpty ? null : _suggestions;
+    }
+  }
+
+  bool _matchesPrefix(LspCompletion item, String prefix) {
+    final filterText = item.completionItem['filterText'];
+    final text = filterText is String ? filterText : item.label;
+    return text.toLowerCase().contains(prefix.toLowerCase());
   }
 
   void _scheduleDocumentColorRefresh() {
@@ -421,6 +495,7 @@ class CodeForgeController implements DeltaTextInputClient {
     required String prefix,
     required int line,
     required int character,
+    String? triggerCharacter,
   }) {
     final filePath = openedFile;
     if (!_lspReady || filePath == null) return;
@@ -442,13 +517,16 @@ class CodeForgeController implements DeltaTextInputClient {
         prefix: prefix,
         line: line,
         character: character,
+        triggerCharacter: triggerCharacter,
       );
       return;
     }
 
     final requestId = ++_completionRequestId;
     _activeCompletionKey = completionKey;
-    unawaited(_fetchCompletions(requestId, prefix, line, character));
+    unawaited(
+      _fetchCompletions(requestId, prefix, line, character, triggerCharacter),
+    );
   }
 
   Future<void> _fetchCompletions(
@@ -456,18 +534,40 @@ class CodeForgeController implements DeltaTextInputClient {
     String prefix,
     int line,
     int character,
+    String? triggerCharacter,
   ) async {
     if (_isDisposed || !_lspReady || openedFile == null) return;
+    final stopwatch = Stopwatch()..start();
+    final filePath = openedFile!;
     await Future<void>.delayed(Duration.zero);
-    final completions = await lspConfig!.getCompletions(
-      openedFile!,
+    // The server must see the latest text before it completes at this spot.
+    if (_lspDocumentSyncTimer?.isActive ?? false) {
+      _lspDocumentSyncTimer!.cancel();
+      await _flushLspDocumentSync();
+    }
+    final result = await lspConfig!.getCompletionList(
+      filePath,
       line,
       character,
+      triggerCharacter: triggerCharacter,
     );
     if (_isDisposed || requestId != _completionRequestId) return;
-    _suggestions = completions;
-    _sortSuggestions(prefix);
-    if (!_isDisposed) suggestionsNotifier.value = _suggestions;
+    _completionSession = (
+      filePath: filePath,
+      line: line,
+      wordStart: character - prefix.length,
+      isIncomplete: result.isIncomplete,
+      items: result.items,
+    );
+    // More of the word may have been typed while waiting.
+    final cursor = selection.extentOffset;
+    final currentPrefix = getCurrentWordPrefix(text, cursor);
+    final stillInWord =
+        getLineAtOffset(cursor) == line &&
+        cursor - getLineStartOffset(line) - currentPrefix.length ==
+            character - prefix.length;
+    _showCompletions(result.items, stillInWord ? currentPrefix : prefix);
+    completionLatency.value = stopwatch.elapsed;
 
     final pendingCompletion = _queuedCompletionRequest;
     _queuedCompletionRequest = null;
@@ -484,6 +584,7 @@ class CodeForgeController implements DeltaTextInputClient {
             pendingCompletion.prefix,
             pendingCompletion.line,
             pendingCompletion.character,
+            pendingCompletion.triggerCharacter,
           ),
         );
       }
@@ -491,7 +592,14 @@ class CodeForgeController implements DeltaTextInputClient {
   }
 
   String _completionRequestKey(
-    ({String filePath, String prefix, int line, int character}) request,
+    ({
+      String filePath,
+      String prefix,
+      int line,
+      int character,
+      String? triggerCharacter,
+    })
+    request,
   ) {
     return '${request.filePath}|${request.line}|${request.character}|${request.prefix}';
   }
@@ -4752,9 +4860,10 @@ class CodeForgeController implements DeltaTextInputClient {
         (code >= 0x0590 && code <= 0x05FF);
   }
 
+  /// The TypeScript server's trigger characters.
   bool _isCompletionTriggerChar(String s) {
     if (s.isEmpty) return false;
-    return s == '.' || s == ':' || s == '>' || s == '/' || s == '@';
+    return s == '.' || s == '"' || s == "'" || s == '/' || s == '<' || s == '@';
   }
 
   List<LspSemanticToken> _convertCclsSymbolsToTokens(List<dynamic> symbols) {
