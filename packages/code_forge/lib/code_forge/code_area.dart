@@ -2525,9 +2525,14 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                         _controller.backspace();
                                                       }
 
-                                                      if (_suggestionNotifier
-                                                              .value !=
-                                                          null) {
+                                                      // With a language server the controller re-filters or
+                                                      // closes the list itself.
+                                                      if (_controller
+                                                                  .lspConfig ==
+                                                              null &&
+                                                          _suggestionNotifier
+                                                                  .value !=
+                                                              null) {
                                                         _suggestionNotifier
                                                                 .value =
                                                             null;
@@ -3099,6 +3104,8 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                           }
                           if (sugg == null || sugg.isEmpty) {
                             _sugSelIndex = 0;
+                            // Edits resolved for this list may not fit the next one.
+                            _extraTextByKey.clear();
                             _controller.currentlySelectedSuggestion = null;
                             return SizedBox.shrink();
                           }
