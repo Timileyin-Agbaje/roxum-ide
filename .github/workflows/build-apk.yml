@@ -76,6 +76,7 @@ jobs:
         run: flutter test
 
       - name: Write signing config
+        id: signing
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -83,6 +84,11 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
+            # GitHub gives pull requests from forks no secrets, so they get analyze and test only.
+            if [ "${{ github.event_name }}" = pull_request ]; then
+              echo "::notice::No signing secrets for this pull request; skipping the APK."
+              exit 0
+            fi
             echo "::error::Signing secrets are missing. Add KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD (see WP9)."
             exit 1
           fi
@@ -93,12 +99,15 @@ jobs:
           keyAlias=$KEY_ALIAS
           keyPassword=$KEY_PASSWORD
           EOF
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       # The build number keeps rising with every run, so each APK installs over the last one.
       - name: Build app bundle
+        if: steps.signing.outputs.ready == 'true'
         run: flutter build appbundle --release --build-number=$((1000 + ${{ github.run_number }}))
 
       - name: Build universal APK
+        if: steps.signing.outputs.ready == 'true'
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -121,6 +130,7 @@ jobs:
           ls -lh roxum-*.apk
 
       - name: Upload artifact
+        if: steps.signing.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APK_NAME }}
@@ -128,7 +138,7 @@ jobs:
           retention-days: 14
 
       - name: Publish release
-        if: github.event_name != 'pull_request'
+        if: steps.signing.outputs.ready == 'true' && github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
