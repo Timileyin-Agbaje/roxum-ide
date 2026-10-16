@@ -364,6 +364,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
   final _suggScrollController = ScrollController();
   final _actionScrollController = ScrollController();
   final Map<String, String> _suggestionDetailsCache = {};
+  final Set<String> _resolvingSuggestions = {};
   final _isMac = Platform.isMacOS;
   final GlobalKey _codeFieldKey = GlobalKey();
   TextInputConnection? _connection;
@@ -3170,10 +3171,10 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                             itemCount: sugg.length,
                                             itemBuilder: (_, indx) {
                                               final item = sugg[indx];
+                                              // Resolve only the highlighted item: resolving every
+                                              // visible row floods the server and slows completions.
                                               if ((item is LspCompletion) &&
-                                                  (indx == _sugSelIndex ||
-                                                      (_isMobile &&
-                                                          _isMobileSuggActive))) {
+                                                  indx == _sugSelIndex) {
                                                 final key =
                                                     _getSuggestionCacheKey(
                                                       item,
@@ -3181,7 +3182,10 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                 if (!_suggestionDetailsCache
                                                         .containsKey(key) &&
                                                     _controller.lspConfig !=
-                                                        null) {
+                                                        null &&
+                                                    _resolvingSuggestions.add(
+                                                      key,
+                                                    )) {
                                                   (() async {
                                                     try {
                                                       final data = await _controller
@@ -3240,6 +3244,9 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                       debugPrint(
                                                         "Completion Resolve failed: ${e.toString()}",
                                                       );
+                                                    } finally {
+                                                      _resolvingSuggestions
+                                                          .remove(key);
                                                     }
                                                   })();
                                                 } else if (_suggestionDetailsCache
