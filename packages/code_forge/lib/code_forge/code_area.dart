@@ -4474,6 +4474,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   double _cachedTotalHeight = 0.0;
   String? _aiResponse, _lastProcessedText;
   int _lastProcessedContentVersion = -1;
+
+  /// The text the semantic spans were last moved to match, while typing in
+  /// the line buffer runs ahead of [_lastProcessedText].
+  String? _spansText;
   TextSelection? _lastSelectionForAi;
   ui.Paragraph? _cachedMagnifiedParagraph;
   int? _cachedMagnifiedLine, _cachedMagnifiedOffset;
@@ -5615,6 +5619,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     if (controller.bufferNeedsRepaint) {
       controller.bufferNeedsRepaint = false;
+      // Move semantic colors with each typed character, not only when the
+      // buffer is flushed.
+      final spansText = _spansText ?? _lastProcessedText;
+      final currentText = controller.text;
+      if (spansText != null && spansText != currentText) {
+        _applyLineBufferEdit(spansText, currentText);
+        _spansText = currentText;
+      }
       if (!_isFoldToggleInProgress) {
         _ensureCaretVisible();
       }
@@ -5645,8 +5657,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     if (dirtyRange == null && textChanged) {
       // Typing into the line buffer only marks the line, so find the edit
       // from the text to keep semantic colors on the right characters.
-      _applyLineBufferEdit(previousText, newText);
+      final spansText = _spansText ?? previousText;
+      if (spansText != newText) _applyLineBufferEdit(spansText, newText);
     }
+    _spansText = null;
     if (dirtyRange != null) {
       final safeEnd = dirtyRange.end.clamp(dirtyRange.start, newText.length);
       final insertedText = newText.substring(dirtyRange.start, safeEnd);
