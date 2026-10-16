@@ -590,8 +590,8 @@ class CodeForgeController implements DeltaTextInputClient {
   /// insertText (expanding snippets and placing the cursor on the first tab
   /// stop), then its additional edits such as auto-imports.
   void acceptCompletion(dynamic suggestion) {
-    suggestionsNotifier.value = null;
-    _completionSession = null;
+    // A reply still on its way must not reopen the popup over the result.
+    _cancelCompletions();
     if (readOnly) return;
     if (suggestion is! LspCompletion) {
       final insertText = _extractSuggestionText(suggestion);
