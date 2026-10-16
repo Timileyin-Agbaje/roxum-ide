@@ -126,11 +126,18 @@ sealed class LspConfig {
   /// ccls is handled in this mode for semantic highlight compatibility.
   bool get forceFullDocumentSync => false;
 
+  Future<void>? _initialization;
+
   /// This method is used to initialize the LSP server.
   ///
-  /// This method is used internally by the [CodeForge] widget and calling it directly is not recommended.
-  /// It may crash the LSP server if called multiple times.
-  Future<void> initialize() async {
+  /// Safe to call more than once (several editors share one server, and the
+  /// app may start it early): later calls wait for the first one.
+  Future<void> initialize() =>
+      _initialization ??= _initialize().whenComplete(() {
+        if (!isInitialized) _initialization = null;
+      });
+
+  Future<void> _initialize() async {
     final workspaceUri = Uri.directory(workspacePath).toString();
     final response = await sendRequest(
       method: 'initialize',
