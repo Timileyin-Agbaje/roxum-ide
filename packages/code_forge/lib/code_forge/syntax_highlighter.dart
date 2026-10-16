@@ -528,6 +528,19 @@ class SyntaxHighlighter {
   bool _isStringOrCommentStyle(TextStyle? style) {
     if (style == null) return false;
 
+    // With a resolver, compare the theme entries themselves: themes reuse
+    // colors (Cursor's numbers and function names share one), and a color
+    // match would block semantic styles on unrelated tokens.
+    if (_semanticResolver != null) {
+      return const [
+        'string',
+        'comment',
+        'number',
+        'regexp',
+        'meta-string',
+      ].any((key) => identical(style, _resolvedTheme[key]));
+    }
+
     final stringStyle = editorTheme['string'];
     final commentStyle = editorTheme['comment'];
     final numberStyle = editorTheme['number'];
@@ -890,8 +903,10 @@ class SyntaxHighlighter {
       ),
     );
 
-    // Results stay valid for their line text even if edits happened meanwhile.
+    // Keep results only for lines that still have the text they were made
+    // from, so a slow request can't replace newer spans.
     for (final entry in results.entries) {
+      if (getLineText(entry.key) != linesToProcess[entry.key]) continue;
       final spanData = entry.value;
       final textSpan = spanData != null ? _spanDataToTextSpan(spanData) : null;
       _grammarCache[entry.key] = HighlightedLine(
@@ -1075,6 +1090,33 @@ class _ScopeSpanRenderer implements HighlightRenderer {
     if (_results.length == 1) return _results.first;
     return _SpanData('', null, _results);
   }
+}
+
+/// The smallest single edit that turns [before] into [after]: the text from
+/// `start` to `oldEnd` in [before] was replaced by `inserted`.
+({int start, int oldEnd, String inserted, String deleted}) diffTexts(
+  String before,
+  String after,
+) {
+  final maxPrefix = before.length < after.length ? before.length : after.length;
+  var start = 0;
+  while (start < maxPrefix &&
+      before.codeUnitAt(start) == after.codeUnitAt(start)) {
+    start++;
+  }
+  var oldEnd = before.length, newEnd = after.length;
+  while (oldEnd > start &&
+      newEnd > start &&
+      before.codeUnitAt(oldEnd - 1) == after.codeUnitAt(newEnd - 1)) {
+    oldEnd--;
+    newEnd--;
+  }
+  return (
+    start: start,
+    oldEnd: oldEnd,
+    inserted: after.substring(start, newEnd),
+    deleted: before.substring(start, oldEnd),
+  );
 }
 
 /// One text edit in line/column terms: the old text from ([line], [column]) to

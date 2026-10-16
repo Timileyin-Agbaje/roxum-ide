@@ -128,4 +128,19 @@ void main() {
     highlighter.applyDocumentEdit(1, 16, 16, 'd', '', edited);
     expect(_layout(highlighter.semanticSpans)[1], ['0-4', '5-8']);
   });
+
+  test('diffTexts finds the edit between two versions', () {
+    final typed = diffTexts('foo(bar);', 'food(bar);');
+    expect(
+      (typed.start, typed.oldEnd, typed.inserted, typed.deleted),
+      (3, 3, 'd', ''),
+    );
+    final replaced = diffTexts('let a = 1;', 'let abc = 12;');
+    expect(
+      (replaced.start, replaced.oldEnd, replaced.inserted, replaced.deleted),
+      (5, 9, 'bc = 12', ' = 1'),
+    );
+    final same = diffTexts('x', 'x');
+    expect((same.start, same.oldEnd, same.inserted), (1, 1, ''));
+  });
 }

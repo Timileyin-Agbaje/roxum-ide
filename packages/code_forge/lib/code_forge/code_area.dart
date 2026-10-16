@@ -5640,7 +5640,13 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       _pauseBracketHighlightDuringTyping();
     }
 
-    final dirtyRange = controller.dirtyRegion;
+    var dirtyRange = controller.dirtyRegion;
+    final editApplied = dirtyRange != null;
+    if (dirtyRange == null && textChanged) {
+      // Typing into the line buffer only marks the line, so find the edit
+      // from the text to keep semantic colors on the right characters.
+      _applyLineBufferEdit(previousText, newText);
+    }
     if (dirtyRange != null) {
       final safeEnd = dirtyRange.end.clamp(dirtyRange.start, newText.length);
       final insertedText = newText.substring(dirtyRange.start, safeEnd);
@@ -5715,7 +5721,8 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       _searchHighlightCache.clear();
       _lineIndentCache.clear();
       _bracketCache.clear();
-      _syntaxHighlighter.invalidateAll();
+      // applyDocumentEdit already moved the highlight caches with the lines.
+      if (!editApplied) _syntaxHighlighter.invalidateAll();
 
       if (enableGutter && gutterStyle.gutterWidth == null) {
         _gutterWidth = _autoGutterWidth(
@@ -8622,6 +8629,22 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
       currentY += lineHeight;
     }
+  }
+
+  void _applyLineBufferEdit(String previousText, String newText) {
+    final edit = diffTexts(previousText, newText);
+    if (edit.deleted.contains('\n') || edit.inserted.contains('\n')) {
+      _syntaxHighlighter.invalidateAll();
+      return;
+    }
+    _syntaxHighlighter.applyDocumentEdit(
+      controller.getLineAtOffset(edit.start),
+      edit.start,
+      edit.oldEnd,
+      edit.inserted,
+      edit.deleted,
+      newText,
+    );
   }
 
   /// Line numbers plus the fold arrow with little padding, so a phone keeps
