@@ -15,3 +15,6 @@ const homeDir = "$appDir/Home";
 const kLocalModelsEnabled = false;
 const kCopilotEnabled = false;
 const kAppThemeToggleEnabled = false;
+
+// Folders the file tree doesn't show. node_modules holds the types copied from the VM.
+const kHiddenTreeFolders = {'node_modules'};

@@ -2622,7 +2622,8 @@ class _DirectoryTreeViewerState extends State<DirectoryTreeViewerCustom> {
     required bool isRoot,
     required bool isLast,
   }) {
-    final entries = directory.listSync();
+    final entries = directory.listSync()
+      ..removeWhere((e) => e is Directory && kHiddenTreeFolders.contains(path.basename(e.path)));
     entries.sort((a, b) {
       if (a is Directory && b is File) return -1;
       if (a is File && b is Directory) return 1;
@@ -2966,11 +2967,14 @@ class _DirectoryTreeViewerState extends State<DirectoryTreeViewerCustom> {
 
   List<String> _getAllDirectoryPaths(Directory directory) {
     final paths = <String>[];
+    final pending = [directory];
     try {
-      final entries = directory.listSync(recursive: true);
-      for (final entry in entries) {
-        if (entry is Directory) {
-          paths.add(entry.path);
+      while (pending.isNotEmpty) {
+        for (final entry in pending.removeLast().listSync(followLinks: false)) {
+          if (entry is Directory && !kHiddenTreeFolders.contains(path.basename(entry.path))) {
+            paths.add(entry.path);
+            pending.add(entry);
+          }
         }
       }
     } catch (_) {}
