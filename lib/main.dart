@@ -18,6 +18,7 @@ Future<void> main() async {
   await RustLib.init();
   await migrateSharedStorageRoots();
   await loadCursorDark();
+  await loadCompletionRecency();
   final recent = await getRecent();
   final appTheme = await getAppTheme();
   final codeForgeConfig = await getCodeForgeConfig();

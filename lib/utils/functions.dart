@@ -1636,6 +1636,26 @@ Future<void> setCopilotEnabledPref(bool isEnabled) async {
   await prefs.setBool(copilotEnabledPrefKey, isEnabled);
 }
 
+const _completionRecencyKey = 'completionRecency';
+Timer? _completionRecencySaveTimer;
+
+/// Restores the recently accepted completions that boost ranking, and saves
+/// them (a few seconds after a change) so they survive restarts.
+Future<void> loadCompletionRecency() async {
+  final prefs = await SharedPreferences.getInstance();
+  final recency = CodeForgeController.completionRecency;
+  try {
+    final saved = prefs.getString(_completionRecencyKey);
+    if (saved != null) recency.load(jsonDecode(saved) as Map<String, dynamic>);
+  } catch (_) {}
+  recency.onChanged = () {
+    _completionRecencySaveTimer?.cancel();
+    _completionRecencySaveTimer = Timer(const Duration(seconds: 3), () {
+      prefs.setString(_completionRecencyKey, jsonEncode(recency.toJson()));
+    });
+  };
+}
+
 Future<String> getAppTheme() async {
   final prefs = await SharedPreferences.getInstance();
   final savedAppTheme = prefs.getString("savedAppTheme");
