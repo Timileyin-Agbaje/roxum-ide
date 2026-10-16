@@ -361,3 +361,20 @@ String? _openingTagName(String line, int start, int end) {
 
 bool _isLetter(int code) =>
     (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+
+/// Turns plain snippet [text] with cursor [locations] (offsets into it, as
+/// in `CustomCodeSnippet`) into LSP snippet syntax: `$1`, `$2`, ... in order.
+String snippetWithStops(String text, Iterable<int> locations) {
+  final sorted = locations.map((l) => l.clamp(0, text.length)).toSet().toList()
+    ..sort();
+  final out = StringBuffer();
+  var last = 0;
+  for (var i = 0; i < sorted.length; i++) {
+    out
+      ..write(escapeSnippetText(text.substring(last, sorted[i])))
+      ..write('\$${i + 1}');
+    last = sorted[i];
+  }
+  out.write(escapeSnippetText(text.substring(last)));
+  return out.toString();
+}

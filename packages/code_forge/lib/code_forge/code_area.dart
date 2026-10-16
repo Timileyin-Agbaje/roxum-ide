@@ -374,9 +374,6 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
   bool _snippetsActive = false, _hoverSetByTap = false;
   int _prevSnippetTextLength = 0, _semanticTokensVersion = 0;
   List<LspSemanticToken>? _semanticTokens;
-
-  /// Auto-import edits of resolved items, so each item applies its own.
-  final Map<String, List<Map<String, dynamic>>> _extraTextByKey = {};
   int _sugSelIndex = 0, _actionSelIndex = 0;
   String? _selectedSuggestionMd;
   Timer? _hoverTimer, _semanticTokenTimer, _hoverRequestTimer;
@@ -412,6 +409,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
     _editorTheme = widget.editorTheme ?? lightfairTheme;
     _language = widget.language ?? Mode();
     _suggestionNotifier = _controller.suggestionsNotifier;
+    _controller.customSnippets = widget.customCodeSnippets ?? const [];
     _prevSnippetTextLength = _controller.text.length;
     _diagnosticsNotifier = _controller.diagnosticsNotifier;
     _lspActionNotifier = _controller.codeActionsNotifier;
@@ -734,6 +732,8 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
     _snippetNotifierListener = () {
       if (_isInjectingSnippets) return;
       if (!_snippetsActive) return;
+      // With a language server the controller ranks snippets with its items.
+      if (_controller.lspConfig != null) return;
       final snippets = widget.customCodeSnippets;
       if (snippets == null || snippets.isEmpty) return;
 
@@ -1041,6 +1041,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
     final newTabSize = widget.tabSize ?? (widget.useSpaceAsTab ? 2 : 1);
     _controller.useSpaceAsTab = widget.useSpaceAsTab;
     _controller.tabSize = newTabSize;
+    _controller.customSnippets = widget.customCodeSnippets ?? const [];
 
     if (widget.language != oldWidget.language) {
       _language = widget.language ?? Mode();
@@ -2262,20 +2263,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                           .enter:
                                                       case LogicalKeyboardKey
                                                           .tab:
-                                                        final accepted =
-                                                            suggestions[_sugSelIndex
-                                                                .clamp(
-                                                                  0,
-                                                                  suggestions
-                                                                          .length -
-                                                                      1,
-                                                                )];
                                                         _acceptSuggestion();
-                                                        unawaited(
-                                                          _applyExtraEdits(
-                                                            accepted,
-                                                          ),
-                                                        );
                                                         setState(() {
                                                           _isSignatureInvoked =
                                                               true;
@@ -2693,7 +2681,10 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                       } else if (_suggestionNotifier
                                                               .value ==
                                                           null) {
-                                                        _controller.indent();
+                                                        if (!_controller
+                                                            .acceptSuggestionOrNextSnippetStop()) {
+                                                          _controller.indent();
+                                                        }
                                                         _commonKeyFunctions();
                                                       }
                                                       return KeyEventResult
@@ -3119,9 +3110,11 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                           final suggestionWidth = min(desiredWidth, 400.0);
                           final itemExtent =
                               _suggestionStyle.itemHeight ?? 24.0;
+                          // About six rows fit on a phone without hiding the code.
+                          final maxPopupHeight = itemExtent * 6 + 2;
                           final estimatedHeight = min(
                             sugg.length * itemExtent,
-                            400.0,
+                            maxPopupHeight,
                           );
                           double adjustedLeft = offset.dx;
                           if (adjustedLeft + suggestionWidth > screenWidth) {
@@ -3160,7 +3153,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                     left: adjustedLeft,
                                     child: ConstrainedBox(
                                       constraints: BoxConstraints(
-                                        maxHeight: 400,
+                                        maxHeight: maxPopupHeight,
                                         maxWidth: 400,
                                         minWidth: 70,
                                       ),
@@ -3203,11 +3196,11 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                     )) {
                                                   (() async {
                                                     try {
-                                                      final data = await _controller
-                                                          .lspConfig!
-                                                          .resolveCompletionItem(
-                                                            item.completionItem,
-                                                          );
+                                                      final data =
+                                                          await _controller
+                                                              .resolveCompletion(
+                                                                item,
+                                                              );
                                                       final mdText =
                                                           "${data['detail'] ?? ''}\n${(() {
                                                             final doc = data['documentation'];
@@ -3223,10 +3216,6 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                           })()}";
                                                       if (!mounted) return;
                                                       setState(() {
-                                                        _extraTextByKey[key] =
-                                                            _editsFrom(
-                                                              data['additionalTextEdits'],
-                                                            );
                                                         _suggestionDetailsCache[key] =
                                                             mdText;
                                                         _selectedSuggestionMd =
@@ -3337,25 +3326,10 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                           _isInjectingSnippets =
                                                               false;
                                                         } else {
-                                                          final text =
-                                                              item
-                                                                  is LspCompletion
-                                                              ? item.label
-                                                              : item as String;
                                                           _controller
-                                                              .insertAtCurrentCursor(
-                                                                text,
-                                                                replaceTypedChar:
-                                                                    true,
+                                                              .acceptCompletion(
+                                                                item,
                                                               );
-                                                          unawaited(
-                                                            _applyExtraEdits(
-                                                              item,
-                                                            ),
-                                                          );
-                                                          _suggestionNotifier
-                                                                  .value =
-                                                              null;
                                                         }
                                                         _isSignatureInvoked =
                                                             true;
@@ -3411,7 +3385,9 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                                     .ellipsis,
                                                           ),
                                                         ),
-                                                        if (item.importUri?[0] !=
+                                                        if (_completionDetail(
+                                                              item,
+                                                            ) !=
                                                             null) ...[
                                                           const SizedBox(
                                                             width: 8,
@@ -3419,7 +3395,9 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                           Expanded(
                                                             flex: 2,
                                                             child: Text(
-                                                              item.importUri![0],
+                                                              _completionDetail(
+                                                                item,
+                                                              )!,
                                                               style:
                                                                   _suggestionStyle
                                                                       .detailTextStyle ??
@@ -4096,27 +4074,18 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
     );
   }
 
-  List<Map<String, dynamic>> _editsFrom(dynamic edits) => [
-    if (edits is List)
-      for (final edit in edits)
-        if (edit is Map) Map<String, dynamic>.from(edit),
-  ];
-
-  /// Applies the accepted item's own auto-import edits, resolving it first if
-  /// the popup hasn't yet (for example a row tapped without highlighting it).
-  Future<void> _applyExtraEdits(dynamic item) async {
-    final config = _controller.lspConfig;
-    if (item is! LspCompletion || config == null) return;
-    var edits = _extraTextByKey[_getSuggestionCacheKey(item)];
-    if (edits == null) {
-      try {
-        final data = await config.resolveCompletionItem(item.completionItem);
-        edits = _editsFrom(data['additionalTextEdits']);
-      } catch (_) {
-        return;
-      }
+  /// Grey text after the label: where an auto-import comes from, or the
+  /// item's detail.
+  String? _completionDetail(LspCompletion item) {
+    final labelDetails = item.completionItem['labelDetails'];
+    final description = labelDetails is Map
+        ? labelDetails['description']
+        : null;
+    final detail = item.completionItem['detail'];
+    for (final text in [description, detail, item.importUri?.firstOrNull]) {
+      if (text is String && text.trim().isNotEmpty) return text.trim();
     }
-    if (edits.isNotEmpty) await _controller.applyWorkspaceEdit(edits);
+    return null;
   }
 
   void _acceptSuggestion() {

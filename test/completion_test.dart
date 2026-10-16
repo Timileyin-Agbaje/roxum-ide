@@ -87,6 +87,11 @@ void main() {
         parseSnippet(escapeSnippetText(r'cost: $5 {x}')).text,
         r'cost: $5 {x}',
       );
+      final fromLocations = parseSnippet(
+        snippetWithStops('if (\$a) {\n  \n}', [4, 12]),
+      );
+      expect(fromLocations.text, 'if (\$a) {\n  \n}');
+      expect(fromLocations.stops.map((t) => t.start), [4, 12, 14]);
     });
   });
 
