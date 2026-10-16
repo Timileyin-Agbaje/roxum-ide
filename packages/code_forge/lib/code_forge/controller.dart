@@ -352,10 +352,14 @@ class CodeForgeController implements DeltaTextInputClient {
     if (text != _previousValue && _lspReady) {
       final currentText = text;
       final currentSelection = selection;
+      final grewBy = currentText.length - _previousValue.length;
+      final cursor = currentSelection.extentOffset;
+      // Typing a quote or bracket also inserts its closing pair.
       final isTypingLenMatch =
-          currentText.length == _previousValue.length + 1 &&
-          currentSelection.extentOffset == _prevSelection.extentOffset + 1 &&
-          _isTyping;
+          _isTyping &&
+          cursor == _prevSelection.extentOffset + 1 &&
+          (grewBy == 1 ||
+              (grewBy == 2 && _isAutoClosedPair(currentText, cursor)));
       final isBackspace =
           currentText.length == _previousValue.length - 1 &&
           currentSelection.extentOffset == _prevSelection.extentOffset - 1;
@@ -394,6 +398,12 @@ class CodeForgeController implements DeltaTextInputClient {
     }
     _previousValue = text;
     _prevSelection = selection;
+  }
+
+  bool _isAutoClosedPair(String text, int cursor) {
+    if (cursor <= 0 || cursor >= text.length) return false;
+    const pairs = {'(': ')', '{': '}', '[': ']', '"': '"', "'": "'"};
+    return pairs[text[cursor - 1]] == text[cursor];
   }
 
   void _onCharacterTyped(String currentText, int cursorPosition) {
