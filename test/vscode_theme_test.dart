@@ -4,7 +4,8 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:roxum/utils/vscode_theme.dart';
 
-VsCodeTheme _theme(String tokenColors) => VsCodeTheme.parse('{"colors": {}, "tokenColors": $tokenColors}');
+VsCodeTheme _theme(String tokenColors) =>
+    VsCodeTheme.parse('{"colors": {}, "tokenColors": $tokenColors}');
 
 void main() {
   test('parses VS Code colors, alpha last', () {
@@ -23,7 +24,8 @@ void main() {
     }''';
     expect(
       stripJsonComments(source).replaceAll(RegExp(r'\s'), ''),
-      '{"url":"http://x.dev/*not a comment*/","list":[1,2],"last":"a,"}'.replaceAll(' ', ''),
+      '{"url":"http://x.dev/*not a comment*/","list":[1,2],"last":"a,"}'
+          .replaceAll(' ', ''),
     );
   });
 
@@ -34,27 +36,47 @@ void main() {
       {"scope": "entity.name.function", "settings": {"foreground": "#333333"}},
       {"scope": "entity.name.functional", "settings": {"foreground": "#444444"}}
     ]''');
-    expect(theme.resolve(['entity.name.function.tsx']).foreground, const Color(0xFF333333));
-    expect(theme.resolve(['entity.name.type']).foreground, const Color(0xFF111111));
+    expect(
+      theme.resolve(['entity.name.function.tsx']).foreground,
+      const Color(0xFF333333),
+    );
+    expect(
+      theme.resolve(['entity.name.type']).foreground,
+      const Color(0xFF111111),
+    );
     expect(theme.resolve(['entity.names']).foreground, isNull);
   });
 
-  test('the deepest scope with a rule wins; parent selectors must match ancestors', () {
-    final theme = _theme('''[
+  test(
+    'the deepest scope with a rule wins; parent selectors must match ancestors',
+    () {
+      final theme = _theme('''[
       {"scope": "meta.tag", "settings": {"foreground": "#111111"}},
       {"scope": "entity.name.tag.html", "settings": {"foreground": "#222222", "fontStyle": "bold"}},
       {"scope": "source.css entity.name.tag", "settings": {"foreground": "#333333"}}
     ]''');
-    expect(theme.resolve(['meta.tag.tsx', 'entity.name.tag.tsx']).foreground, const Color(0xFF111111));
-    final html = theme.resolve(['meta.tag.html', 'entity.name.tag.html']);
-    expect(html.foreground, const Color(0xFF222222));
-    expect(html.toTextStyle().fontWeight, FontWeight.bold);
-    expect(theme.resolve(['source.css', 'entity.name.tag.css']).foreground, const Color(0xFF333333));
-    expect(theme.resolve(['source.js', 'entity.name.tag.js']).foreground, isNull);
-  });
+      expect(
+        theme.resolve(['meta.tag.tsx', 'entity.name.tag.tsx']).foreground,
+        const Color(0xFF111111),
+      );
+      final html = theme.resolve(['meta.tag.html', 'entity.name.tag.html']);
+      expect(html.foreground, const Color(0xFF222222));
+      expect(html.toTextStyle().fontWeight, FontWeight.bold);
+      expect(
+        theme.resolve(['source.css', 'entity.name.tag.css']).foreground,
+        const Color(0xFF333333),
+      );
+      expect(
+        theme.resolve(['source.js', 'entity.name.tag.js']).foreground,
+        isNull,
+      );
+    },
+  );
 
   test('Cursor Dark gives each kind of name its own color', () {
-    final theme = VsCodeTheme.parse(File('assets/themes/cursor-dark.json').readAsStringSync());
+    final theme = VsCodeTheme.parse(
+      File('assets/themes/cursor-dark.json').readAsStringSync(),
+    );
     final tsx = highlightThemeFromVsCode(theme, textMateLanguageFor('.tsx'));
     expect(tsx['root']!.backgroundColor, const Color(0xFF181818));
     expect(tsx['keyword']!.color, const Color(0xFF82D2CE));

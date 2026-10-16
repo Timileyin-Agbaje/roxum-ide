@@ -29,13 +29,25 @@ class VsCodeTheme {
       if (entry is! Map) continue;
       final settings = entry['settings'];
       if (settings is! Map) continue;
-      final foreground = settings['foreground'] is String ? parseVsCodeColor(settings['foreground']) : null;
-      final fontStyle = settings['fontStyle'] is String ? settings['fontStyle'] as String : null;
+      final foreground = settings['foreground'] is String
+          ? parseVsCodeColor(settings['foreground'])
+          : null;
+      final fontStyle = settings['fontStyle'] is String
+          ? settings['fontStyle'] as String
+          : null;
       if (foreground == null && fontStyle == null) continue;
       final scope = entry['scope'];
-      final selectors = scope is String ? [scope] : scope is List ? scope.whereType<String>() : const <String>[];
+      final selectors = scope is String
+          ? [scope]
+          : scope is List
+          ? scope.whereType<String>()
+          : const <String>[];
       for (final selector in selectors.expand((s) => s.split(','))) {
-        final parts = selector.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty && p != '>').toList();
+        final parts = selector
+            .trim()
+            .split(RegExp(r'\s+'))
+            .where((p) => p.isNotEmpty && p != '>')
+            .toList();
         if (parts.isEmpty || parts.any((p) => p.startsWith('-'))) continue;
         rules.add(TokenRule(parts, foreground, fontStyle));
       }
@@ -44,14 +56,17 @@ class VsCodeTheme {
       name: json['name'] as String? ?? '',
       colors: colors,
       rules: rules,
-      semanticTokenColors: Map<String, dynamic>.from(json['semanticTokenColors'] as Map? ?? {}),
+      semanticTokenColors: Map<String, dynamic>.from(
+        json['semanticTokenColors'] as Map? ?? {},
+      ),
     );
   }
 
   Color color(String key, Color fallback) => colors[key] ?? fallback;
 
   /// [color] drawn over [background], for translucent theme colors used as solid fills.
-  Color solid(String key, Color background) => Color.alphaBlend(colors[key] ?? const Color(0x00000000), background);
+  Color solid(String key, Color background) =>
+      Color.alphaBlend(colors[key] ?? const Color(0x00000000), background);
 
   /// Resolves a scope stack (outermost first) the way VS Code does: each property comes
   /// from the deepest scope that a rule matches; among rules for the same scope, the
@@ -60,17 +75,27 @@ class VsCodeTheme {
     Color? foreground;
     String? fontStyle;
     for (var depth = scopes.length - 1; depth >= 0; depth--) {
-      foreground ??= _best(scopes, depth, (r) => r.foreground != null)?.foreground;
+      foreground ??= _best(
+        scopes,
+        depth,
+        (r) => r.foreground != null,
+      )?.foreground;
       fontStyle ??= _best(scopes, depth, (r) => r.fontStyle != null)?.fontStyle;
       if (foreground != null && fontStyle != null) break;
     }
     return TokenStyle(foreground, fontStyle);
   }
 
-  TokenRule? _best(List<String> scopes, int depth, bool Function(TokenRule) has) {
+  TokenRule? _best(
+    List<String> scopes,
+    int depth,
+    bool Function(TokenRule) has,
+  ) {
     TokenRule? best;
     for (final rule in rules) {
-      if (!has(rule) || !_scopeMatches(rule.parts.last, scopes[depth])) continue;
+      if (!has(rule) || !_scopeMatches(rule.parts.last, scopes[depth])) {
+        continue;
+      }
       if (!_parentsMatch(rule.parts, scopes, depth)) continue;
       if (best == null || _compare(rule, best) >= 0) best = rule;
     }
@@ -83,7 +108,11 @@ class VsCodeTheme {
     return a.parts.length.compareTo(b.parts.length);
   }
 
-  static bool _parentsMatch(List<String> parts, List<String> scopes, int depth) {
+  static bool _parentsMatch(
+    List<String> parts,
+    List<String> scopes,
+    int depth,
+  ) {
     var scopeIndex = depth - 1;
     for (var i = parts.length - 2; i >= 0; i--) {
       while (scopeIndex >= 0 && !_scopeMatches(parts[i], scopes[scopeIndex])) {
@@ -96,7 +125,8 @@ class VsCodeTheme {
   }
 
   static bool _scopeMatches(String selector, String scope) =>
-      scope == selector || (scope.startsWith(selector) && scope.codeUnitAt(selector.length) == 0x2E);
+      scope == selector ||
+      (scope.startsWith(selector) && scope.codeUnitAt(selector.length) == 0x2E);
 }
 
 class TokenRule {
@@ -111,7 +141,8 @@ class TokenStyle {
   final String? fontStyle;
   const TokenStyle(this.foreground, this.fontStyle);
 
-  bool get isEmpty => foreground == null && (fontStyle == null || fontStyle!.trim().isEmpty);
+  bool get isEmpty =>
+      foreground == null && (fontStyle == null || fontStyle!.trim().isEmpty);
 
   TextStyle toTextStyle() {
     final styles = (fontStyle ?? '').split(' ');
@@ -119,7 +150,9 @@ class TokenStyle {
       color: foreground,
       fontWeight: styles.contains('bold') ? FontWeight.bold : null,
       fontStyle: styles.contains('italic') ? FontStyle.italic : null,
-      decoration: styles.contains('underline') ? TextDecoration.underline : null,
+      decoration: styles.contains('underline')
+          ? TextDecoration.underline
+          : null,
     );
   }
 }
@@ -195,12 +228,14 @@ class TextMateLanguage {
   const TextMateLanguage(this.rootScope, this.suffix, {this.isMarkup = false});
 }
 
-TextMateLanguage? textMateLanguageFor(String extension) => switch (extension.toLowerCase()) {
+TextMateLanguage? textMateLanguageFor(String extension) => switch (extension
+    .toLowerCase()) {
   '.ts' || '.mts' || '.cts' => const TextMateLanguage('source.ts', 'ts'),
   '.tsx' => const TextMateLanguage('source.tsx', 'tsx', isMarkup: true),
   '.js' || '.mjs' || '.cjs' => const TextMateLanguage('source.js', 'js'),
   '.jsx' => const TextMateLanguage('source.js.jsx', 'js.jsx', isMarkup: true),
-  '.html' || '.htm' => const TextMateLanguage('text.html.basic', 'html', isMarkup: true),
+  '.html' ||
+  '.htm' => const TextMateLanguage('text.html.basic', 'html', isMarkup: true),
   '.css' => const TextMateLanguage('source.css', 'css'),
   _ => null,
 };
@@ -249,20 +284,29 @@ const _markupAttrScopes = ['meta.tag', 'entity.other.attribute-name'];
 
 /// A highlight.js theme map (as used by re_highlight and code_forge) built from [theme].
 /// Keys without a matching rule are left out, so they use the editor foreground.
-Map<String, TextStyle> highlightThemeFromVsCode(VsCodeTheme theme, [TextMateLanguage? language]) {
+Map<String, TextStyle> highlightThemeFromVsCode(
+  VsCodeTheme theme, [
+  TextMateLanguage? language,
+]) {
   List<String> withLanguage(List<String> scopes) => [
     if (language != null) language.rootScope,
-    for (final scope in scopes) language == null ? scope : '$scope.${language.suffix}',
+    for (final scope in scopes)
+      language == null ? scope : '$scope.${language.suffix}',
   ];
 
   final result = <String, TextStyle>{
     'root': TextStyle(
       color: theme.color('editor.foreground', const Color(0xffe4e4e4)),
-      backgroundColor: theme.color('editor.background', const Color(0xff181818)),
+      backgroundColor: theme.color(
+        'editor.background',
+        const Color(0xff181818),
+      ),
     ),
   };
   _highlightScopes.forEach((key, scopes) {
-    final effective = key == 'attr' && (language?.isMarkup ?? false) ? _markupAttrScopes : scopes;
+    final effective = key == 'attr' && (language?.isMarkup ?? false)
+        ? _markupAttrScopes
+        : scopes;
     final style = theme.resolve(withLanguage(effective));
     if (!style.isEmpty) result[key] = style.toTextStyle();
   });
