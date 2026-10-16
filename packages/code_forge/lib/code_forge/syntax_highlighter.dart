@@ -180,6 +180,10 @@ class SyntaxHighlighter {
     applyLineEdit(edit);
   }
 
+  /// Tells the renderer the document changed (it resets its position and
+  /// bracket caches on the next paint) without moving any spans.
+  void markDocumentChanged() => _documentVersion++;
+
   /// Moves cached spans for an edit already in line/column terms.
   void applyLineEdit(LineEdit edit) {
     if (edit.isSingleLine) {

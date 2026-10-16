@@ -5650,6 +5650,9 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     // Buffered keystrokes already moved the semantic spans one by one.
     final spansAlreadyMoved = _bufferSpansLine != null;
     _bufferSpansLine = null;
+    // The keystrokes moved the spans but not the renderer's caches (bracket
+    // matches, caret and wrapped-line positions): reset those once now.
+    if (spansAlreadyMoved) _syntaxHighlighter.markDocumentChanged();
     if (dirtyRange == null && textChanged && !spansAlreadyMoved) {
       // Typing into the line buffer only marks the line, so find the edit
       // from the text to keep semantic colors on the right characters.
