@@ -1073,32 +1073,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
   LspClientCapabilities? _getLspCapabilities(
     Map<String, dynamic> config,
     String langKey,
-  ) {
-    final Map<String, dynamic> featureToggle = Map<String, dynamic>.from(
-      config["LSPFeatureToggle"] ?? {},
-    );
-    final List<String> disabledFeatures = List<String>.from(
-      featureToggle[langKey] ?? [],
-    );
-
-    if (disabledFeatures.isEmpty) {
-      return null;
-    }
-
-    return LspClientCapabilities(
-      semanticHighlighting: !disabledFeatures.contains('semanticHighlighting'),
-      codeCompletion: !disabledFeatures.contains('codeCompletion'),
-      hoverInfo: !disabledFeatures.contains('hoverInfo'),
-      codeAction: !disabledFeatures.contains('codeAction'),
-      signatureHelp: !disabledFeatures.contains('signatureHelp'),
-      documentColor: !disabledFeatures.contains('documentColor'),
-      documentHighlight: !disabledFeatures.contains('documentHighlight'),
-      codeFolding: !disabledFeatures.contains('codeFolding'),
-      inlayHint: !disabledFeatures.contains('inlayHint'),
-      goToDefinition: !disabledFeatures.contains('goToDefinition'),
-      rename: !disabledFeatures.contains('rename'),
-    );
-  }
+  ) => lspCapabilitiesFromConfig(config, langKey);
 
   bool _isTrackableEditor(ActiveEditor editor) {
     if (_isPreviewEditor(editor)) {

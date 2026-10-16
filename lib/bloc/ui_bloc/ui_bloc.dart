@@ -203,10 +203,33 @@ class ActiveEditorBloc extends Bloc<EditorEvent, ActiveEditorState>{
     return startup;
   }
 
+  /// Starts the project's TypeScript server when the project opens, so the
+  /// first completion doesn't wait for it to boot.
+  Future<void> warmUpTypeScriptServer() async {
+    if (config['enableLSP'] != true) return;
+    final ext = typeScriptProjectExtension(rootDir);
+    if (ext == null) return;
+    final lang = languages.where((l) => l.extension.contains(ext)).firstOrNull;
+    if (lang == null) return;
+    try {
+      final lspConfig = await getOrStartSharedLspConfig(
+        languageId: lspLanguageIdForExtension(ext: ext, fallbackLanguageName: lang.name),
+        ext: lspServerExtForExtension(ext: ext),
+        executable: lang.lspExecutable,
+        args: lang.args ?? [],
+        capabilities: lspCapabilitiesFromConfig(config, lang.name.toLowerCase()),
+      );
+      await lspConfig?.initialize();
+    } catch (e) {
+      debugPrint('TypeScript server warm-up failed: $e');
+    }
+  }
+
   ActiveEditorBloc(this.rootDir, this.config):super(ActiveEditorState([])){
     on<ActiveEditorEvent>((event, emit) => emit(ActiveEditorState(event.activeEditors)));
 
     on<OpenRecentActiveEditor>((event, emit) async {
+      unawaited(warmUpTypeScriptServer());
       final prefs = await SharedPreferences.getInstance();
       final stored = prefs.getString("projects");
       final Map<String, dynamic> recentEditors = jsonDecode(stored ?? "{}");

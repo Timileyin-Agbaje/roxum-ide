@@ -1913,6 +1913,50 @@ String lspServerExtForExtension({required String ext}) {
   }
 }
 
+/// The LSP features left on for [langKey] in Settings, or null when none are turned off.
+LspClientCapabilities? lspCapabilitiesFromConfig(
+  Map<String, dynamic> config,
+  String langKey,
+) {
+  final Map<String, dynamic> featureToggle = Map<String, dynamic>.from(
+    config["LSPFeatureToggle"] ?? {},
+  );
+  final List<String> disabledFeatures = List<String>.from(
+    featureToggle[langKey] ?? [],
+  );
+
+  if (disabledFeatures.isEmpty) {
+    return null;
+  }
+
+  return LspClientCapabilities(
+    semanticHighlighting: !disabledFeatures.contains('semanticHighlighting'),
+    codeCompletion: !disabledFeatures.contains('codeCompletion'),
+    hoverInfo: !disabledFeatures.contains('hoverInfo'),
+    codeAction: !disabledFeatures.contains('codeAction'),
+    signatureHelp: !disabledFeatures.contains('signatureHelp'),
+    documentColor: !disabledFeatures.contains('documentColor'),
+    documentHighlight: !disabledFeatures.contains('documentHighlight'),
+    codeFolding: !disabledFeatures.contains('codeFolding'),
+    inlayHint: !disabledFeatures.contains('inlayHint'),
+    goToDefinition: !disabledFeatures.contains('goToDefinition'),
+    rename: !disabledFeatures.contains('rename'),
+  );
+}
+
+/// The extension of a JS/TS project's entry file (`tsx`, `ts`, `jsx` or `js`),
+/// or null if [rootDir] doesn't look like one. Only checks a few usual paths.
+String? typeScriptProjectExtension(String rootDir) {
+  for (final ext in ['tsx', 'ts', 'jsx', 'js']) {
+    for (final name in ['src/main', 'src/index', 'src/App', 'index', 'main']) {
+      if (File(path.join(rootDir, '$name.$ext')).existsSync()) return ext;
+    }
+  }
+  if (File(path.join(rootDir, 'tsconfig.json')).existsSync()) return 'ts';
+  if (File(path.join(rootDir, 'package.json')).existsSync()) return 'js';
+  return null;
+}
+
 String lspServerExtForFilePath(String filePath) {
   return lspServerExtForExtension(ext: path.extension(filePath));
 }
@@ -1984,6 +2028,28 @@ bool isLspServerAvailable({
   }
 
   return true;
+}
+
+/// typescript-language-server options: a syntax-only server answers quick requests
+/// while the full one loads, and phones with 4 GB of RAM or less cap tsserver's heap.
+Future<Map<String, dynamic>> typeScriptInitializationOptions() async {
+  return {
+    'tsserver': {'useSyntaxServer': 'auto'},
+    if (await _deviceMemoryKb() case final kb? when kb <= _smallDeviceMemoryKb) 'maxTsServerMemory': 1024,
+  };
+}
+
+/// MemTotal of a "4 GB" phone is a little under 4 GiB; 4.5 GiB leaves room for that.
+const _smallDeviceMemoryKb = 4718592;
+
+Future<int?> _deviceMemoryKb() async {
+  try {
+    final memInfo = await File('/proc/meminfo').readAsString();
+    final match = RegExp(r'^MemTotal:\s+(\d+) kB', multiLine: true).firstMatch(memInfo);
+    return match == null ? null : int.parse(match.group(1)!);
+  } catch (_) {
+    return null;
+  }
 }
 
 Future<LspConfig?> startLspServer({
@@ -2125,7 +2191,9 @@ Future<LspConfig?> startLspServer({
       ? {
           'zig_exe_path': '$binDir/zig',
         }
-      : <String, dynamic>{};
+      : (normalizedExt == 'ts' || normalizedExt == 'js')
+        ? await typeScriptInitializationOptions()
+        : <String, dynamic>{};
 
     final config = await LspStdioConfig.start(
       executable: resolvedExecutable,
