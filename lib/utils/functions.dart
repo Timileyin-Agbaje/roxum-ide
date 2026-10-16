@@ -2033,9 +2033,17 @@ bool isLspServerAvailable({
 
 /// typescript-language-server options: a syntax-only server answers quick requests
 /// while the full one loads, and phones with 4 GB of RAM or less cap tsserver's heap.
+/// Completions may be snippets (`fn($1)`, JSX `attr={$1}`) and include auto-imports.
 Future<Map<String, dynamic>> typeScriptInitializationOptions() async {
   return {
     'tsserver': {'useSyntaxServer': 'auto'},
+    'preferences': {
+      'includeCompletionsWithSnippetText': true,
+      'includeCompletionsWithInsertText': true,
+      'includeCompletionsForModuleExports': true,
+      'includeCompletionsForImportStatements': true,
+      'jsxAttributeCompletionStyle': 'auto',
+    },
     if (await _deviceMemoryKb() case final kb? when kb <= _smallDeviceMemoryKb) 'maxTsServerMemory': 1024,
   };
 }
@@ -2203,7 +2211,11 @@ Future<LspConfig?> startLspServer({
       environment: resolvedEnvironment,
       workspacePath: workspacePath,
       languageId: langId.toLowerCase(),
-      initializationOptions: initializationOptions
+      initializationOptions: initializationOptions,
+      // Function completions insert `name($1)` with the cursor in the parentheses.
+      workspaceConfiguration: (normalizedExt == 'ts' || normalizedExt == 'js')
+        ? const {'completions': {'completeFunctionCalls': true}}
+        : const {},
     );
     return config;
   } catch (e) {

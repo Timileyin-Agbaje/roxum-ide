@@ -34,6 +34,13 @@ CustomCodeSnippet _snippet(String label, String template) {
   );
 }
 
+final _reactSnippets = [
+  _snippet('rfc', 'export default function __CURSOR__() {\n  return (\n    <div>__CURSOR__</div>\n  );\n}'),
+  _snippet('us', 'const [__CURSOR__, set__CURSOR__] = useState(__CURSOR__);'),
+  _snippet('ue', 'useEffect(() => {\n  __CURSOR__\n}, [__CURSOR__]);'),
+  _snippet('map', 'map((item) => (\n  <li key={item.id}>__CURSOR__</li>\n))'),
+];
+
 bool _hasAnyExt(Set<String> exts, List<String> targets) {
   for (final target in targets) {
     if (exts.contains(target)) return true;
@@ -63,6 +70,7 @@ List<CustomCodeSnippet> _defaultSnippetsForExtensions(List<String> extensions) {
       _snippet('for-of', 'for (const item of items) {\n  __CURSOR__\n}'),
       _snippet('function', 'function name(params) {\n  __CURSOR__\n}'),
       _snippet('try-catch', 'try {\n  __CURSOR__\n} catch (error) {\n  console.error(error);\n}'),
+      ..._reactSnippets,
     ];
   }
 
