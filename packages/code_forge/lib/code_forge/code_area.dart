@@ -4915,10 +4915,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       if (_gutterStyle.gutterWidth != null) {
         _gutterWidth = gutterStyle.gutterWidth!;
       } else {
-        final digits = controller.lineCount.toString().length;
-        final digitWidth = digits * _gutterPadding * 0.6;
-        final foldIconSpace = enableFolding ? fontSize + 4 : 0;
-        _gutterWidth = digitWidth + foldIconSpace + _gutterPadding;
+        _gutterWidth = _autoGutterWidth(controller.lineCount, fontSize);
       }
     } else {
       _gutterWidth = 0;
@@ -5195,10 +5192,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       if (_gutterStyle.gutterWidth != null) {
         _gutterWidth = _gutterStyle.gutterWidth!;
       } else {
-        final digits = controller.lineCount.toString().length;
-        final digitWidth = digits * _gutterPadding * 0.6;
-        final foldIconSpace = _enableFolding ? fontSize + 4 : 0;
-        _gutterWidth = digitWidth + foldIconSpace + _gutterPadding;
+        _gutterWidth = _autoGutterWidth(controller.lineCount, fontSize);
       }
     } else {
       _gutterWidth = 0;
@@ -5724,11 +5718,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       _syntaxHighlighter.invalidateAll();
 
       if (enableGutter && gutterStyle.gutterWidth == null) {
-        final fontSize = textStyle?.fontSize ?? 14.0;
-        final digits = newLineCount.toString().length;
-        final digitWidth = digits * _gutterPadding * 0.6;
-        final foldIconSpace = enableFolding ? fontSize + 4 : 0;
-        _gutterWidth = digitWidth + foldIconSpace + _gutterPadding;
+        _gutterWidth = _autoGutterWidth(
+          newLineCount,
+          textStyle?.fontSize ?? 14.0,
+        );
       }
 
       if (enableFolding) {
@@ -8504,8 +8497,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
           offset +
               Offset(
                 (isRTL ? size.width - _gutterWidth : 0) +
-                    (_gutterWidth - numWidth) / 2 -
-                    (enableFolding ? (lineNumberStyle.fontSize ?? 14) / 2 : 0),
+                    (_gutterWidth -
+                            _foldIconSpace(lineNumberStyle.fontSize ?? 14) -
+                            numWidth) /
+                        2,
                 (innerPadding?.top ?? 0) +
                     contentTop +
                     visualYOffset -
@@ -8628,6 +8623,16 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       currentY += lineHeight;
     }
   }
+
+  /// Line numbers plus the fold arrow with little padding, so a phone keeps
+  /// as many columns as possible for code.
+  double _autoGutterWidth(int lineCount, double fontSize) {
+    final digitWidth = lineCount.toString().length * fontSize * 0.6;
+    return digitWidth + _foldIconSpace(fontSize) + fontSize * 0.5;
+  }
+
+  double _foldIconSpace(double fontSize) =>
+      _enableFolding ? fontSize * 0.85 : 0;
 
   ui.Paragraph _buildLineNumberParagraph(String text, TextStyle style) {
     final builder =
