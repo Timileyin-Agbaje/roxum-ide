@@ -46,6 +46,7 @@ node -v && tsx --version
   - HTML and CSS files still preview on the phone.
 - **Stop** in the terminal sends Ctrl+C, then ends anything left of the run on the VM.
 - While a Vite dev server runs, saved files sync automatically so hot reload sees them. Turn this off with **Sync on save** in the same menu.
+- After `npm install` runs on the VM, the app copies the packages' type definitions (every `package.json` and `.d.ts` file) into the phone project's `node_modules`, so hovers and auto-imports on the phone know React and the other packages. A `node_modules` installed on the phone itself is left alone. The file tree hides `node_modules`.
 - **Clean VM copy** in that menu deletes the project's folder on the VM. Nothing on the VM is deleted otherwise.
 - If the VM is stopped, Play offers **Run on phone instead**.
 
