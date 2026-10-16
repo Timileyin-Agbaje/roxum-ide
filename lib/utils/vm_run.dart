@@ -5,7 +5,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
+import 'package:archive/archive.dart';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
@@ -325,6 +327,103 @@ $body
   }
 }
 
+/// Copies type definitions (every package.json and .d.ts file) from the VM's
+/// node_modules into the phone project, so the TypeScript server on the phone
+/// knows the packages `npm install` put on the VM.
+class VmTypesSync {
+  /// Marks a phone node_modules made by this class, holding the VM's
+  /// `.roxum-deps` stamp it was copied from.
+  static const stampName = '.roxum-types';
+
+  final VmProjectSync project;
+
+  VmTypesSync(this.project);
+
+  String get _modulesDir => path.join(project.rootDir, 'node_modules');
+
+  String get _archive => '"\$HOME"/.roxum/types-${project.projectKey}.tgz';
+
+  /// Copies the types if the VM's installed dependencies changed since the
+  /// last copy. Returns true when the phone's types were replaced.
+  /// [onCopying] runs once a copy starts.
+  Future<bool> update({void Function()? onCopying}) async {
+    final client = project.server.client;
+    if (client == null || client.isClosed) return false;
+
+    final localStamp = File(path.join(_modulesDir, stampName));
+    // node_modules without our stamp is a real install on the phone: keep it.
+    if (await Directory(_modulesDir).exists() && !await localStamp.exists()) {
+      return false;
+    }
+    final remoteStamp = utf8.decode(await client.run(
+      'cat ${project.remoteShellDir}/node_modules/.roxum-deps 2>/dev/null',
+      stderr: false,
+    )).trim();
+    if (remoteStamp.isEmpty) return false;
+    if (await localStamp.exists() && (await localStamp.readAsString()).trim() == remoteStamp) {
+      return false;
+    }
+    onCopying?.call();
+
+    final packed = utf8.decode(await client.run(
+      'mkdir -p "\$HOME/.roxum" && cd ${project.remoteShellDir} && '
+      'find node_modules -path node_modules/typescript -prune -o -type f '
+      "\\( -name package.json -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' \\) -print0 "
+      '| tar -czf $_archive --null -T - && echo packed',
+      stderr: false,
+    ));
+    if (!packed.contains('packed')) {
+      throw Exception('Could not pack the types on ${project.server.name}');
+    }
+
+    final sftp = await client.sftp();
+    final Uint8List bytes;
+    try {
+      final home = await sftp.absolute('.');
+      final file = await sftp.open(path.posix.join(home, '.roxum', 'types-${project.projectKey}.tgz'));
+      try {
+        bytes = await file.readBytes();
+      } finally {
+        await file.close();
+      }
+    } finally {
+      sftp.close();
+    }
+    await client.run('rm -f $_archive');
+
+    final rootDir = project.rootDir;
+    await Isolate.run(() => extractTypesArchive(bytes, rootDir, remoteStamp));
+    return true;
+  }
+}
+
+/// Replaces `<projectDir>/node_modules` with the files in the gzipped tar
+/// [bytes] (paths under node_modules only) and writes the stamp last.
+Future<void> extractTypesArchive(Uint8List bytes, String projectDir, String stamp) async {
+  final archive = TarDecoder().decodeBytes(const GZipDecoder().decodeBytes(bytes));
+  final modules = Directory(path.join(projectDir, 'node_modules'));
+  if (await modules.exists()) await modules.delete(recursive: true);
+  for (final entry in archive) {
+    final relative = safeTypesEntryPath(entry.name);
+    if (relative == null || !entry.isFile || entry.isSymbolicLink) continue;
+    final file = File(path.join(projectDir, relative));
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(entry.content);
+  }
+  await modules.create(recursive: true);
+  await File(path.join(modules.path, VmTypesSync.stampName)).writeAsString(stamp);
+}
+
+/// The local relative path for an archive entry, or null unless it stays
+/// inside node_modules.
+String? safeTypesEntryPath(String name) {
+  final normalized = path.posix.normalize(name.replaceAll('\\', '/'));
+  final parts = path.posix.split(normalized);
+  if (path.posix.isAbsolute(normalized) || parts.contains('..')) return null;
+  if (parts.length < 2 || parts.first != 'node_modules') return null;
+  return path.joinAll(parts);
+}
+
 /// What pressing Play does on the VM for a file.
 class VmRunPlan {
   /// The script body run from the project folder.
@@ -470,7 +569,7 @@ class VmSession {
   SSHInfo? _server;
   VmPreviewTunnel? _tunnel;
   StreamSubscription<String>? _saveSubscription;
-  Timer? _saveDebounce, _watchTimer, _statusClear;
+  Timer? _saveDebounce, _watchTimer, _statusClear, _typesTimer;
   Future<void> _syncChain = Future.value();
   final Set<String> _savedSinceSync = {};
   bool _disposed = false;
@@ -589,6 +688,46 @@ class VmSession {
     return previewUrl;
   }
 
+  /// Copies the VM's package types to the phone once `npm install` has run
+  /// there, checking every 5 s for up to [timeout] (the install may still be
+  /// running). [onUpdated] runs after a copy.
+  void watchTypes(
+    SSHInfo server, {
+    required VoidCallback onUpdated,
+    Duration timeout = const Duration(minutes: 10),
+  }) {
+    _typesTimer?.cancel();
+    final types = VmTypesSync(syncFor(server));
+    final started = DateTime.now();
+    var busy = false;
+    Future<void> check() async {
+      if (busy || _disposed) return;
+      busy = true;
+      try {
+        final copied = await types.update(
+          onCopying: () => _setStatus(VmStatus('Copying package types from ${server.name}…')),
+        );
+        if (copied) {
+          _typesTimer?.cancel();
+          _setStatus(VmStatus('Package types copied from ${server.name}'),
+              clearAfter: const Duration(seconds: 3));
+          onUpdated();
+        } else if (DateTime.now().difference(started) > timeout) {
+          _typesTimer?.cancel();
+        }
+      } catch (e) {
+        _typesTimer?.cancel();
+        _setStatus(VmStatus('Could not copy package types: $e', isError: true),
+            clearAfter: const Duration(seconds: 8));
+      } finally {
+        busy = false;
+      }
+    }
+
+    unawaited(check());
+    _typesTimer = Timer.periodic(const Duration(seconds: 5), (_) => check());
+  }
+
   Future<void> stopDevServerTunnel() async {
     _watchTimer?.cancel();
     _watchTimer = null;
@@ -605,6 +744,7 @@ class VmSession {
   Future<void> dispose() async {
     _disposed = true;
     _statusClear?.cancel();
+    _typesTimer?.cancel();
     await stopDevServerTunnel();
     status.dispose();
   }

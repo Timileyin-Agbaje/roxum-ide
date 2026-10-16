@@ -151,6 +151,35 @@ void main() {
     expect(await _run(server, 'cat ${remote('b.js')}'), 'b');
   }, skip: skip);
 
+  test('copies package types from the VM once npm install has run', () async {
+    await write('package.json', '{}');
+    await sync.sync();
+    final types = VmTypesSync(sync);
+    final stamp = File(path.join(project.path, 'node_modules', VmTypesSync.stampName));
+    expect(await types.update(), isFalse, reason: 'nothing installed yet');
+
+    await _run(server, 'cd ${sync.remoteShellDir} && mkdir -p node_modules/react node_modules/typescript node_modules/.bin && '
+        "echo '{}' > node_modules/react/package.json && echo 'export {};' > node_modules/react/index.d.ts && "
+        "echo 'x' > node_modules/react/index.js && echo '{}' > node_modules/typescript/package.json && "
+        "echo 'v1' > node_modules/.roxum-deps");
+    expect(await types.update(), isTrue);
+    expect(File(path.join(project.path, 'node_modules', 'react', 'index.d.ts')).readAsStringSync().trim(), 'export {};');
+    expect(File(path.join(project.path, 'node_modules', 'react', 'index.js')).existsSync(), isFalse);
+    expect(Directory(path.join(project.path, 'node_modules', 'typescript')).existsSync(), isFalse);
+    expect(stamp.readAsStringSync(), 'v1');
+    expect(await _run(server, 'ls "\$HOME"/.roxum/types-* 2>/dev/null || true'), isEmpty);
+
+    expect(await types.update(), isFalse, reason: 'unchanged');
+    await _run(server, "cd ${sync.remoteShellDir} && echo 'v2' > node_modules/.roxum-deps");
+    expect(await types.update(), isTrue);
+    expect(stamp.readAsStringSync(), 'v2');
+
+    // A real install on the phone (no stamp) is left alone.
+    await stamp.delete();
+    await _run(server, "cd ${sync.remoteShellDir} && echo 'v3' > node_modules/.roxum-deps");
+    expect(await types.update(), isFalse);
+  }, skip: skip);
+
   test('runs JavaScript and TypeScript files on the VM', () async {
     await write('hello.js', 'console.log("hello from " + require("os").hostname())');
     await write('src/typed.ts', 'const n: number = 6 * 7; console.log(`answer \${n}`)');
