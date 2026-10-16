@@ -143,6 +143,7 @@ class CodeForgeController implements DeltaTextInputClient {
   /// of the document so edits before them don't move them.
   List<({int fromEnd, int length})> _snippetStops = [];
   ({int startFromEnd, int endFromEnd})? _snippetRange;
+  int _signatureRequestId = 0;
 
   CodeForgeController({this.lspConfig}) {
     if (lspConfig != null) {
@@ -800,10 +801,7 @@ class CodeForgeController implements DeltaTextInputClient {
     final filePath = openedFile!;
     await Future<void>.delayed(Duration.zero);
     // The server must see the latest text before it completes at this spot.
-    if (_lspDocumentSyncTimer?.isActive ?? false) {
-      _lspDocumentSyncTimer!.cancel();
-      await _flushLspDocumentSync();
-    }
+    await _flushPendingLspSync();
     final result = await lspConfig!.getCompletionList(
       filePath,
       line,
@@ -5083,17 +5081,30 @@ class CodeForgeController implements DeltaTextInputClient {
   /// for the current cursor position, displaying available parameters and
   /// highlighting the parameter in focus within function parentheses.
   Future<void> callSignatureHelp() async {
-    if (lspConfig != null) {
+    if (lspConfig != null && openedFile != null) {
+      final requestId = ++_signatureRequestId;
+      // Without this the server answers for the text before the '(' or ','.
+      await _flushPendingLspSync();
+      if (requestId != _signatureRequestId || _isDisposed) return;
       final cursorPosition = selection.extentOffset;
       final line = getLineAtOffset(cursorPosition);
       final lineStartOffset = getLineStartOffset(line);
       final character = cursorPosition - lineStartOffset;
-      signatureNotifier.value = await lspConfig!.getSignatureHelp(
+      final help = await lspConfig!.getSignatureHelp(
         openedFile!,
         line,
         character,
         1,
       );
+      if (requestId != _signatureRequestId || _isDisposed) return;
+      signatureNotifier.value = help;
+    }
+  }
+
+  Future<void> _flushPendingLspSync() async {
+    if (_lspDocumentSyncTimer?.isActive ?? false) {
+      _lspDocumentSyncTimer!.cancel();
+      await _flushLspDocumentSync();
     }
   }
 
