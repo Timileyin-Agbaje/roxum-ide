@@ -1097,6 +1097,11 @@ sealed class LspConfig {
       if (_serverTokenTypes != null && tokenType < _serverTokenTypes!.length) {
         tokenTypeName = _serverTokenTypes![tokenType];
       }
+      final legendModifiers = _serverTokenModifiers ?? const <String>[];
+      final modifiers = [
+        for (var bit = 0; bit < legendModifiers.length; bit++)
+          if ((tokenModifiers as int) & (1 << bit) != 0) legendModifiers[bit],
+      ];
 
       result.add(
         LspSemanticToken(
@@ -1106,6 +1111,7 @@ sealed class LspConfig {
           typeIndex: tokenType,
           modifierBitmask: tokenModifiers,
           tokenTypeName: tokenTypeName,
+          modifiers: modifiers,
         ),
       );
     }
@@ -1459,6 +1465,9 @@ class LspSemanticToken {
   /// This is populated from the server's semanticTokensProvider.legend.tokenTypes list.
   final String? tokenTypeName;
 
+  /// Modifier names from the server's legend (e.g. 'declaration', 'readonly').
+  final List<String> modifiers;
+
   const LspSemanticToken({
     required this.line,
     required this.start,
@@ -1466,6 +1475,7 @@ class LspSemanticToken {
     required this.typeIndex,
     required this.modifierBitmask,
     this.tokenTypeName,
+    this.modifiers = const [],
   });
 
   int get end => start + length;

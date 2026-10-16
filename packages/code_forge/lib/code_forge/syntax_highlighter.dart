@@ -36,7 +36,20 @@ class _SpanData {
   _SpanData(this.text, this.scope, [this.children = const []]);
 }
 
+/// Colors a semantic token from its type, modifiers and the document's
+/// language id, or returns null to leave the grammar color.
+typedef SemanticStyleResolver = TextStyle? Function(
+  String tokenType,
+  List<String> modifiers,
+  String? languageId,
+);
+
 class SyntaxHighlighter {
+  /// When set, semantic tokens are colored by this instead of being mapped
+  /// onto highlight.js theme keys, and they win over grammar colors except in
+  /// strings and comments, as in VS Code.
+  static SemanticStyleResolver? semanticStyleResolver;
+
   final Mode language;
   final List<Mode> extraLanguages;
   final Map<String, TextStyle> editorTheme;
@@ -50,6 +63,8 @@ class SyntaxHighlighter {
   late final Map<String, TextStyle> _resolvedTheme;
   late final List<Mode> _registeredExtraLanguages;
   late final Map<String, List<String>> _semanticMapping;
+  final SemanticStyleResolver? _semanticResolver = semanticStyleResolver;
+  final Map<String, TextStyle?> _semanticStyleCache = {};
   static const int isolateThreshold = 500;
   static const int _cacheKeepMargin = 500;
   static const int _maxLineCacheEntries = 6000;
@@ -99,7 +114,7 @@ class SyntaxHighlighter {
 
       if (start < end) {
         final word = lineText.substring(start, end);
-        final style = _resolveSemanticStyle(token.tokenTypeName);
+        final style = _resolveSemanticStyle(token);
 
         if (style != null && word.isNotEmpty) {
           final lineSpans = updatedLineSemanticSpans.putIfAbsent(
@@ -433,10 +448,21 @@ class SyntaxHighlighter {
         final grammarStyle = _getStyleAtPosition(grammarSegments, range.start);
         final preserveGrammar =
             _isStringOrCommentStyle(grammarStyle) ||
-            _hasMeaningfulGrammarStyle(grammarStyle);
+            (_semanticResolver == null &&
+                _hasMeaningfulGrammarStyle(grammarStyle));
 
         if (preserveGrammar) {
           children.add(TextSpan(text: actualText, style: grammarStyle));
+        } else if (_semanticResolver != null) {
+          // Semantic styles set only what the theme defines for the token.
+          children.add(
+            TextSpan(
+              text: actualText,
+              style:
+                  (grammarStyle ?? baseTextStyle)?.merge(range.style) ??
+                  range.style,
+            ),
+          );
         } else {
           children.add(TextSpan(text: actualText, style: range.style));
         }
@@ -603,8 +629,17 @@ class SyntaxHighlighter {
     return false;
   }
 
-  TextStyle? _resolveSemanticStyle(String? tokenTypeName) {
+  TextStyle? _resolveSemanticStyle(LspSemanticToken token) {
+    final tokenTypeName = token.tokenTypeName;
     if (tokenTypeName == null) return null;
+
+    final resolver = _semanticResolver;
+    if (resolver != null) {
+      return _semanticStyleCache.putIfAbsent(
+        '$tokenTypeName.${token.modifiers.join('.')}',
+        () => resolver(tokenTypeName, token.modifiers, languageId),
+      );
+    }
 
     final hljsKeys = _semanticMapping[tokenTypeName];
     if (hljsKeys == null) return null;
