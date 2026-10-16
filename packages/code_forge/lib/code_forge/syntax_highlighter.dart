@@ -177,6 +177,26 @@ class SyntaxHighlighter {
       insertedText: insertedText,
     );
 
+    applyLineEdit(edit);
+  }
+
+  /// Moves cached spans for an edit already in line/column terms.
+  void applyLineEdit(LineEdit edit) {
+    if (edit.isSingleLine) {
+      // Typing: only this line's spans move.
+      final spans = _lineSemanticSpans.remove(edit.line);
+      if (spans != null) {
+        final moved = shiftSemanticSpans({edit.line: spans}, edit)[edit.line];
+        if (moved != null) _lineSemanticSpans[edit.line] = moved;
+      }
+      _grammarCache.remove(edit.line);
+      _mergedCache.remove(edit.line);
+      _isEditing = false;
+      _lineSpanCache.clear();
+      _version++;
+      return;
+    }
+
     final shifted = shiftSemanticSpans(_lineSemanticSpans, edit);
     _lineSemanticSpans
       ..clear()

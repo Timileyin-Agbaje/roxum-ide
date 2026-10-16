@@ -4475,9 +4475,9 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
   String? _aiResponse, _lastProcessedText;
   int _lastProcessedContentVersion = -1;
 
-  /// The text the semantic spans were last moved to match, while typing in
+  /// The buffered line as the semantic spans last matched it, while typing in
   /// the line buffer runs ahead of [_lastProcessedText].
-  String? _spansText;
+  ({int line, String text})? _bufferSpansLine;
   TextSelection? _lastSelectionForAi;
   ui.Paragraph? _cachedMagnifiedParagraph;
   int? _cachedMagnifiedLine, _cachedMagnifiedOffset;
@@ -5619,14 +5619,7 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     if (controller.bufferNeedsRepaint) {
       controller.bufferNeedsRepaint = false;
-      // Move semantic colors with each typed character, not only when the
-      // buffer is flushed.
-      final spansText = _spansText ?? _lastProcessedText;
-      final currentText = controller.text;
-      if (spansText != null && spansText != currentText) {
-        _applyLineBufferEdit(spansText, currentText);
-        _spansText = currentText;
-      }
+      _moveSpansWithBufferedLine();
       if (!_isFoldToggleInProgress) {
         _ensureCaretVisible();
       }
@@ -5654,13 +5647,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     var dirtyRange = controller.dirtyRegion;
     final editApplied = dirtyRange != null;
-    if (dirtyRange == null && textChanged) {
+    // Buffered keystrokes already moved the semantic spans one by one.
+    final spansAlreadyMoved = _bufferSpansLine != null;
+    _bufferSpansLine = null;
+    if (dirtyRange == null && textChanged && !spansAlreadyMoved) {
       // Typing into the line buffer only marks the line, so find the edit
       // from the text to keep semantic colors on the right characters.
-      final spansText = _spansText ?? previousText;
-      if (spansText != newText) _applyLineBufferEdit(spansText, newText);
+      _applyLineBufferEdit(previousText, newText);
     }
-    _spansText = null;
     if (dirtyRange != null) {
       final safeEnd = dirtyRange.end.clamp(dirtyRange.start, newText.length);
       final insertedText = newText.substring(dirtyRange.start, safeEnd);
@@ -5670,14 +5664,16 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       final deletedText = previousText.substring(dirtyRange.start, oldEnd);
       final editLine = controller.getLineAtOffset(dirtyRange.start);
 
-      _syntaxHighlighter.applyDocumentEdit(
-        editLine,
-        dirtyRange.start,
-        oldEnd,
-        insertedText,
-        deletedText,
-        newText,
-      );
+      if (!spansAlreadyMoved) {
+        _syntaxHighlighter.applyDocumentEdit(
+          editLine,
+          dirtyRange.start,
+          oldEnd,
+          insertedText,
+          deletedText,
+          newText,
+        );
+      }
 
       _bracketCache.removeWhere((pos, _) => pos >= dirtyRange.start);
       _paragraphCache.removeWhere((line, _) => line >= editLine);
@@ -8643,6 +8639,34 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
       currentY += lineHeight;
     }
+  }
+
+  /// Moves semantic colors with each buffered keystroke by comparing only the
+  /// buffered line with its previous text, so typing stays cheap in big files.
+  /// Without a previous text the flush moves them instead.
+  void _moveSpansWithBufferedLine() {
+    final lineIndex = controller.bufferLineIndex;
+    final lineText = controller.bufferLineText;
+    if (lineIndex == null || lineText == null || lineText.contains('\n')) {
+      return;
+    }
+    final tracked = _bufferSpansLine;
+    final previous = tracked != null && tracked.line == lineIndex
+        ? tracked.text
+        : (tracked == null ? _lineTextCache[lineIndex] : null);
+    if (previous == null || previous.contains('\n')) return;
+    if (previous != lineText) {
+      final edit = diffTexts(previous, lineText);
+      _syntaxHighlighter.applyLineEdit(
+        LineEdit.fromText(
+          line: lineIndex,
+          column: edit.start,
+          deletedText: edit.deleted,
+          insertedText: edit.inserted,
+        ),
+      );
+    }
+    _bufferSpansLine = (line: lineIndex, text: lineText);
   }
 
   void _applyLineBufferEdit(String previousText, String newText) {
