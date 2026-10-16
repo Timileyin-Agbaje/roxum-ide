@@ -923,6 +923,12 @@ Future<void> loadCursorDark() async {
   );
 }
 
+/// Colors LSP semantic tokens from Cursor's `semanticTokenColors` (see [SyntaxHighlighter.semanticStyleResolver]).
+TextStyle? cursorSemanticStyle(String type, List<String> modifiers, String? languageId) {
+  final style = cursorDark.resolveSemantic(type, modifiers, vsCodeLanguageId(languageId));
+  return style.isEmpty ? null : style.toTextStyle();
+}
+
 final _cursorHighlightCache = <String, Map<String, TextStyle>>{};
 
 /// The Cursor Dark editor theme for a file extension such as `.tsx`. Scopes get the
