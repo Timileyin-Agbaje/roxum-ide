@@ -8,6 +8,7 @@ import 'package:roxum/l10n/app_localizations.dart';
 import 'bloc/repo_bloc/repo_bloc.dart';
 import 'bloc/ui_bloc/ui_bloc.dart';
 import 'ui/start_screen.dart';
+import 'utils/constants.dart';
 import 'utils/functions.dart';
 import 'utils/themes.dart';
 import 'terminal/terminal.dart';
@@ -16,6 +17,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
   await migrateSharedStorageRoots();
+  await loadCursorDark();
   final recent = await getRecent();
   final appTheme = await getAppTheme();
   final codeForgeConfig = await getCodeForgeConfig();
@@ -92,11 +94,11 @@ class _MainAppState extends State<MainApp> {
   Widget build(BuildContext context) {
     return MultiBlocProvider(
       providers: [
-        BlocProvider(create: (_) => ConfigBloc(codeForgeConfig: jsonDecode(widget.codeForgeConfig))),
+        BlocProvider(create: (_) => ConfigBloc(codeForgeConfig: jsonDecode(widget.codeForgeConfig), fontSize: defaultEditorFontSize())),
         BlocProvider(create: (_) => FolderBloc()),
         BlocProvider(create: (_) => GitCommitBloc()),
         BlocProvider(create: (_) => RecentBloc(recent: jsonDecode(widget.recent))),
-        BlocProvider(create: (_) => AppThemeBloc(appTheme: themeMap[widget.appTheme]!)),
+        BlocProvider(create: (_) => AppThemeBloc(appTheme: kAppThemeToggleEnabled ? themeMap[widget.appTheme]! : CursorDarkTheme())),
         BlocProvider(create: (_) => WebViewBloc()),
         BlocProvider(create: (_) => MenuSearchBloc()),
         BlocProvider(create: (_) => DownloadManagerBloc()),
@@ -142,7 +144,7 @@ class _MainAppState extends State<MainApp> {
           };
           return MaterialApp(
             onGenerateTitle: (context) => AppLocalizations.of(context)!.appTitle,
-            theme: ThemeData(
+            theme: appThemeState.appTheme is CursorDarkTheme ? cursorDarkThemeData(appThemeState.appTheme) : ThemeData(
               progressIndicatorTheme: progressTheme,
               popupMenuTheme: appThemeState.appTheme.popupBtnTheme,
               scaffoldBackgroundColor: appThemeState.appTheme.scaffoldBg,

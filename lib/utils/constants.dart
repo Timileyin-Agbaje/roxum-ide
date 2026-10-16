@@ -14,3 +14,4 @@ const homeDir = "$appDir/Home";
 // Features this fork removes. The code stays so upstream merges stay simple; these hide it.
 const kLocalModelsEnabled = false;
 const kCopilotEnabled = false;
+const kAppThemeToggleEnabled = false;

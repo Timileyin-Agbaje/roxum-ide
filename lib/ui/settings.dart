@@ -2388,7 +2388,7 @@ int main() {
                       ),
                       settingsDivider,
                       settingsType("Appearance", appThemeState.appTheme.isDark),
-                      settingsTile(
+                      if (kAppThemeToggleEnabled) settingsTile(
                         null,
                         "App Theme",
                         appThemeState.appTheme.isDark ? Icon(

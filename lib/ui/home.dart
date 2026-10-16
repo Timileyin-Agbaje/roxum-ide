@@ -653,7 +653,7 @@ class _SelectTypeState extends State<SelectType> with WidgetsBindingObserver {
                   );
                 },
               ),
-              IconButton(
+              if (kAppThemeToggleEnabled) IconButton(
                 tooltip: l10n.appTheme,
                 onPressed: () async {
                   final prefs = await SharedPreferences.getInstance();

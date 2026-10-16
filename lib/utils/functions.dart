@@ -1648,8 +1648,8 @@ Future<String> getCodeForgeConfig() async {
     "indentLineStatus": true,
     "lineWrap": false,
     "enableFolding": true,
-    "theme": "vs2015",
-    "terminalTheme": "classic-green",
+    "theme": cursorDarkThemeId,
+    "terminalTheme": cursorDarkThemeId,
     "fontFamily": "jetBrainsMono",
     "terminalFontSize": 14.0,
     "isAIEnabled": true,
@@ -1661,10 +1661,18 @@ Future<String> getCodeForgeConfig() async {
   };
   final configString = prefs.getString('codeForgeConfig');
   if (configString == null) {
+    await prefs.setBool(_cursorDarkAppliedKey, true);
     return jsonEncode(defaultConfig);
   }
   try {
     final Map<String, dynamic> storedConfig = jsonDecode(configString);
+    // Switch existing installs to Cursor Dark once; later choices in Settings stick.
+    if (prefs.getBool(_cursorDarkAppliedKey) != true) {
+      storedConfig["theme"] = cursorDarkThemeId;
+      storedConfig["terminalTheme"] = cursorDarkThemeId;
+      await prefs.setString('codeForgeConfig', jsonEncode(storedConfig));
+      await prefs.setBool(_cursorDarkAppliedKey, true);
+    }
     final mergedConfig = Map<String, dynamic>.from(defaultConfig)
       ..addAll(storedConfig);
     return jsonEncode(mergedConfig);
@@ -1672,6 +1680,8 @@ Future<String> getCodeForgeConfig() async {
     return jsonEncode(defaultConfig);
   }
 }
+
+const _cursorDarkAppliedKey = 'cursorDarkApplied';
 
 Map<String, CustomEditorTheme> getCustomEditorThemes(Map<String, dynamic> codeForgeConfig) {
   final rawThemes = codeForgeConfig['customEditorThemes'];
