@@ -144,9 +144,11 @@ class SyntaxHighlighter {
     _isEditing = false;
     _lineSpanCache.clear();
     _mergedCache.clear();
-    _grammarCache.clear();
     _version++;
   }
+
+  @visibleForTesting
+  Map<int, List<SemanticWordSpan>> get semanticSpans => _lineSemanticSpans;
 
   void applyDocumentEdit(
     int editLine,
@@ -157,103 +159,45 @@ class SyntaxHighlighter {
     String fullText,
   ) {
     _documentVersion++;
-    final insertedLineBreaks = '\n'.allMatches(insertedText).length;
-    final deletedLineBreaks = '\n'.allMatches(deletedText).length;
-    final lineBreakDelta = insertedLineBreaks - deletedLineBreaks;
-    final isPureInsertion = oldEnd == editStart;
-    final isPureDeletion = insertedText.isEmpty && oldEnd > editStart;
-    if (lineBreakDelta != 0 && (isPureInsertion || isPureDeletion)) {
-      final shiftedSemanticSpans = <int, List<SemanticWordSpan>>{};
-      for (final entry in _lineSemanticSpans.entries) {
-        final lineIndex = entry.key;
-        if (lineIndex > editLine) {
-          shiftedSemanticSpans[lineIndex + lineBreakDelta] = entry.value;
-        } else {
-          shiftedSemanticSpans[lineIndex] = entry.value;
-        }
-      }
-
-      _lineSemanticSpans
-        ..clear()
-        ..addAll(shiftedSemanticSpans);
-      _grammarCache.removeWhere((line, _) => line >= editLine);
-      _mergedCache.removeWhere((line, _) => line >= editLine);
-      _isEditing = false;
-    } else if (insertedText.isNotEmpty || deletedText.isNotEmpty) {
-      final lineSemanticSpans = _lineSemanticSpans[editLine];
-      if (lineSemanticSpans != null && lineSemanticSpans.isNotEmpty) {
-        final updatedLineSemanticSpans = <SemanticWordSpan>[];
-        final insertedLength = insertedText.length;
-        final deletedLength = deletedText.length;
-        final shiftDelta = insertedLength - deletedLength;
-        final insertedEnd = editStart + insertedLength;
-
-        for (final span in lineSemanticSpans) {
-          if (span.endChar <= editStart) {
-            updatedLineSemanticSpans.add(span);
-            continue;
-          }
-
-          if (span.startChar >= oldEnd) {
-            updatedLineSemanticSpans.add(
-              SemanticWordSpan(
-                startChar: span.startChar + shiftDelta,
-                endChar: span.endChar + shiftDelta,
-                word: span.word,
-                style: span.style,
-              ),
-            );
-            continue;
-          }
-
-          if (span.startChar < editStart) {
-            final leftEnd = editStart.clamp(span.startChar, span.endChar);
-            if (leftEnd > span.startChar) {
-              updatedLineSemanticSpans.add(
-                SemanticWordSpan(
-                  startChar: span.startChar,
-                  endChar: leftEnd,
-                  word: span.word.substring(0, leftEnd - span.startChar),
-                  style: span.style,
-                ),
-              );
-            }
-          }
-
-          if (span.endChar > oldEnd) {
-            final rightStart = insertedEnd;
-            final rightEnd = span.endChar + shiftDelta;
-            if (rightEnd > rightStart) {
-              final rightWordStart =
-                  (span.word.length - (span.endChar - oldEnd)).clamp(
-                    0,
-                    span.word.length,
-                  );
-              updatedLineSemanticSpans.add(
-                SemanticWordSpan(
-                  startChar: rightStart,
-                  endChar: rightEnd,
-                  word: span.word.substring(rightWordStart),
-                  style: span.style,
-                ),
-              );
-            }
-          }
-        }
-
-        updatedLineSemanticSpans.sort(
-          (a, b) => a.startChar == b.startChar
-              ? a.endChar.compareTo(b.endChar)
-              : a.startChar.compareTo(b.startChar),
-        );
-        _lineSemanticSpans[editLine] = updatedLineSemanticSpans;
-      }
-
-      _isEditing = false;
-    } else {
+    if (insertedText.isEmpty && deletedText.isEmpty) {
       _isEditing = true;
+      _lineSpanCache.clear();
+      _version++;
+      return;
     }
 
+    // editStart is a document offset; spans use columns within their line.
+    final lineStart = editStart <= 0
+        ? 0
+        : fullText.lastIndexOf('\n', editStart - 1) + 1;
+    final edit = LineEdit.fromText(
+      line: editLine,
+      column: editStart - lineStart,
+      deletedText: deletedText,
+      insertedText: insertedText,
+    );
+
+    final shifted = shiftSemanticSpans(_lineSemanticSpans, edit);
+    _lineSemanticSpans
+      ..clear()
+      ..addAll(shifted);
+
+    // Grammar spans depend only on the line's text (checked on lookup), so
+    // lines outside the edit keep theirs and are re-keyed when lines move.
+    final shiftedGrammar = <int, HighlightedLine>{};
+    for (final entry in _grammarCache.entries) {
+      if (entry.key < edit.line) {
+        shiftedGrammar[entry.key] = entry.value;
+      } else if (entry.key > edit.oldEndLine) {
+        shiftedGrammar[entry.key + edit.lineDelta] = entry.value;
+      }
+    }
+    _grammarCache
+      ..clear()
+      ..addAll(shiftedGrammar);
+    _mergedCache.clear();
+
+    _isEditing = false;
     _lineSpanCache.clear();
     _version++;
   }
@@ -296,9 +240,7 @@ class SyntaxHighlighter {
 
     final grammarCache = _grammarCache[lineIndex];
     final cachedGrammarSpan =
-        grammarCache != null &&
-            grammarCache.version == _version &&
-            grammarCache.text == lineText
+        grammarCache != null && grammarCache.text == lineText
         ? grammarCache.span
         : null;
 
@@ -361,11 +303,7 @@ class SyntaxHighlighter {
     }
 
     final grammarCache = _grammarCache[lineIndex];
-    final hasGrammar =
-        grammarCache != null &&
-        grammarCache.version == _version &&
-        grammarCache.text == lineText;
-    return hasGrammar;
+    return grammarCache != null && grammarCache.text == lineText;
   }
 
   /// Obtains a cached span only. Unlike [getLineSpan], this never invokes
@@ -379,10 +317,7 @@ class SyntaxHighlighter {
     }
 
     final grammarCache = _grammarCache[lineIndex];
-    final hasGrammar =
-        grammarCache != null &&
-        grammarCache.version == _version &&
-        grammarCache.text == lineText;
+    final hasGrammar = grammarCache != null && grammarCache.text == lineText;
     final semanticSpans = _lineSemanticSpans[lineIndex];
     if (hasGrammar) {
       if (_isEditing || semanticSpans == null || semanticSpans.isEmpty) {
@@ -924,9 +859,7 @@ class SyntaxHighlighter {
     for (int i = startLine; i <= endLine; i++) {
       final lineText = getLineText(i);
       final cached = _grammarCache[i];
-      if (cached == null ||
-          cached.text != lineText ||
-          cached.version != _version) {
+      if (cached == null || cached.text != lineText) {
         linesToProcess[i] = lineText;
       }
     }
@@ -938,9 +871,7 @@ class SyntaxHighlighter {
       (sum, line) => sum + line.length,
     );
     if (totalChars < 2000) {
-      if (requestVersion != _version) return;
       for (final entry in linesToProcess.entries) {
-        if (requestVersion != _version) return;
         final span = _highlightLine(entry.value);
         _grammarCache[entry.key] = HighlightedLine(entry.value, span, _version);
       }
@@ -959,8 +890,7 @@ class SyntaxHighlighter {
       ),
     );
 
-    if (requestVersion != _version) return;
-
+    // Results stay valid for their line text even if edits happened meanwhile.
     for (final entry in results.entries) {
       final spanData = entry.value;
       final textSpan = spanData != null ? _spanDataToTextSpan(spanData) : null;
@@ -1145,4 +1075,131 @@ class _ScopeSpanRenderer implements HighlightRenderer {
     if (_results.length == 1) return _results.first;
     return _SpanData('', null, _results);
   }
+}
+
+/// One text edit in line/column terms: the old text from ([line], [column]) to
+/// ([oldEndLine], [oldEndColumn]) was replaced by text ending at
+/// ([newEndLine], [newEndColumn]).
+class LineEdit {
+  final int line, column;
+  final int oldEndLine, oldEndColumn;
+  final int newEndLine, newEndColumn;
+
+  /// Whether the inserted text could be part of an identifier, so a span the
+  /// edit touches can keep its color while the word is being typed.
+  final bool extendsWord;
+
+  const LineEdit({
+    required this.line,
+    required this.column,
+    required this.oldEndLine,
+    required this.oldEndColumn,
+    required this.newEndLine,
+    required this.newEndColumn,
+    required this.extendsWord,
+  });
+
+  factory LineEdit.fromText({
+    required int line,
+    required int column,
+    required String deletedText,
+    required String insertedText,
+  }) {
+    (int, int) end(String text) {
+      final lastBreak = text.lastIndexOf('\n');
+      if (lastBreak < 0) return (line, column + text.length);
+      return (line + '\n'.allMatches(text).length, text.length - lastBreak - 1);
+    }
+
+    final (oldEndLine, oldEndColumn) = end(deletedText);
+    final (newEndLine, newEndColumn) = end(insertedText);
+    return LineEdit(
+      line: line,
+      column: column,
+      oldEndLine: oldEndLine,
+      oldEndColumn: oldEndColumn,
+      newEndLine: newEndLine,
+      newEndColumn: newEndColumn,
+      extendsWord: RegExp(r'^[A-Za-z0-9_$]*$').hasMatch(insertedText),
+    );
+  }
+
+  int get lineDelta => newEndLine - oldEndLine;
+  bool get isSingleLine => line == oldEndLine && line == newEndLine;
+}
+
+/// Moves semantic spans to where their text is after [edit], so colors stay
+/// put until the server sends new tokens. Spans inside deleted text are
+/// dropped; a span being typed into (identifier characters only) grows.
+@visibleForTesting
+Map<int, List<SemanticWordSpan>> shiftSemanticSpans(
+  Map<int, List<SemanticWordSpan>> spansByLine,
+  LineEdit edit,
+) {
+  final result = <int, List<SemanticWordSpan>>{};
+  void add(int line, SemanticWordSpan span, int start, int end) {
+    if (end <= start) return;
+    result
+        .putIfAbsent(line, () => [])
+        .add(
+          SemanticWordSpan(
+            startChar: start,
+            endChar: end,
+            word: span.word,
+            style: span.style,
+          ),
+        );
+  }
+
+  final columnShift = edit.newEndColumn - edit.oldEndColumn;
+  for (final MapEntry(key: line, value: spans) in spansByLine.entries) {
+    if (line < edit.line) {
+      result[line] = spans;
+      continue;
+    }
+    if (line > edit.oldEndLine) {
+      result[line + edit.lineDelta] = spans;
+      continue;
+    }
+    for (final span in spans) {
+      final before = line == edit.line && span.endChar <= edit.column;
+      final after =
+          line == edit.oldEndLine && span.startChar >= edit.oldEndColumn;
+      final touches =
+          edit.isSingleLine &&
+          edit.extendsWord &&
+          span.startChar <= edit.column &&
+          span.endChar >= edit.oldEndColumn &&
+          !(span.startChar == edit.column && span.endChar == edit.oldEndColumn);
+      if (touches) {
+        add(line, span, span.startChar, span.endChar + columnShift);
+      } else if (before) {
+        add(line, span, span.startChar, span.endChar);
+      } else if (after) {
+        add(
+          edit.newEndLine,
+          span,
+          span.startChar + columnShift,
+          span.endChar + columnShift,
+        );
+      } else {
+        // The span overlaps replaced text: keep the parts outside it.
+        if (line == edit.line && span.startChar < edit.column) {
+          add(line, span, span.startChar, edit.column);
+        }
+        if (line == edit.oldEndLine && span.endChar > edit.oldEndColumn) {
+          add(
+            edit.newEndLine,
+            span,
+            edit.newEndColumn,
+            span.endChar + columnShift,
+          );
+        }
+      }
+    }
+  }
+  for (final spans in result.values) {
+    spans.sort((a, b) => a.startChar.compareTo(b.startChar));
+  }
+  return result;
 }
