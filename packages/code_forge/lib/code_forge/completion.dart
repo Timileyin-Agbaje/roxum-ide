@@ -296,25 +296,51 @@ const _voidTags = {
   'wbr',
 };
 
-/// The closing tag to insert after typing `>` at the end of [lineBeforeCursor]
-/// (which includes that `>`), or null if it doesn't close an opening tag:
-/// `<div className="a">` gives `</div>`, `<>` gives `</>`, while self-closing
-/// tags, void HTML tags, closing tags and generics like `useState<string>`
-/// give null.
-String? closingTagFor(String lineBeforeCursor) {
-  if (!lineBeforeCursor.endsWith('>')) return null;
-  final end = lineBeforeCursor.length - 1;
+/// The closing tag to insert after typing `>` at the end of [textBeforeCursor]
+/// (which includes that `>`; it may span lines), or null if it doesn't close
+/// an opening tag: `<div className="a">` gives `</div>`, `<>` gives `</>`,
+/// while self-closing tags, void HTML tags, closing tags, generics like
+/// `useState<string>` and tags inside strings or `//` comments give null.
+String? closingTagFor(String textBeforeCursor) {
+  if (!textBeforeCursor.endsWith('>')) return null;
+  final end = textBeforeCursor.length - 1;
   for (
-    var start = lineBeforeCursor.lastIndexOf('<', end - 1);
+    var start = textBeforeCursor.lastIndexOf('<', end - 1);
     start >= 0;
-    start = start == 0 ? -1 : lineBeforeCursor.lastIndexOf('<', start - 1)
+    start = start == 0 ? -1 : textBeforeCursor.lastIndexOf('<', start - 1)
   ) {
-    final name = _openingTagName(lineBeforeCursor, start, end);
+    final name = _openingTagName(textBeforeCursor, start, end);
     if (name == null) continue;
-    if (_voidTags.contains(name.toLowerCase())) return null;
+    if (_inStringOrLineComment(textBeforeCursor, start)) return null;
+    // Lowercase names are HTML elements; capitalized ones (<Input>) are
+    // components and always need a closing tag.
+    if (name == name.toLowerCase() && _voidTags.contains(name)) return null;
     return '</$name>';
   }
   return null;
+}
+
+/// Whether [index] follows an unclosed quote or `//` on its line. JSX text
+/// with an apostrophe before the tag also counts; that only means no closing
+/// tag is added.
+bool _inStringOrLineComment(String text, int index) {
+  final lineStart = text.lastIndexOf('\n', index) + 1;
+  String? quote;
+  for (var i = lineStart; i < index; i++) {
+    final char = text[i];
+    if (quote != null) {
+      if (char == r'\') {
+        i++;
+      } else if (char == quote) {
+        quote = null;
+      }
+    } else if (char == '"' || char == "'" || char == '`') {
+      quote = char;
+    } else if (char == '/' && i + 1 < index && text[i + 1] == '/') {
+      return true;
+    }
+  }
+  return quote != null;
 }
 
 /// The tag name if `<` at [start] opens a tag that ends with the `>` at [end].

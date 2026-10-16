@@ -144,6 +144,15 @@ class CodeForgeController implements DeltaTextInputClient {
   List<({int fromEnd, int length})> _snippetStops = [];
   ({int startFromEnd, int endFromEnd})? _snippetRange;
   int _signatureRequestId = 0;
+  bool _signatureHelpRequested = false;
+
+  /// True once after an accepted completion put the cursor inside a call's
+  /// parentheses, so the editor opens parameter hints.
+  bool consumeSignatureHelpRequest() {
+    final requested = _signatureHelpRequested;
+    _signatureHelpRequested = false;
+    return requested;
+  }
 
   CodeForgeController({this.lspConfig}) {
     if (lspConfig != null) {
@@ -339,6 +348,8 @@ class CodeForgeController implements DeltaTextInputClient {
         });
       });
     }
+    // Works without a language server.
+    _listeners.add(_autoCloseTagListener);
   }
 
   Future<void> _openDocumentInLsp({String? previousFile}) async {
@@ -382,13 +393,6 @@ class CodeForgeController implements DeltaTextInputClient {
       final isBackspace =
           currentText.length == _previousValue.length - 1 &&
           currentSelection.extentOffset == _prevSelection.extentOffset - 1;
-
-      if (grewBy == 1 &&
-          cursor == _prevSelection.extentOffset + 1 &&
-          currentText[cursor - 1] == '>' &&
-          _isMarkupFile) {
-        scheduleMicrotask(() => _autoCloseTag(cursor));
-      }
 
       // Completions are handled right away; only the heavier refreshes below
       // wait for typing to pause.
@@ -434,13 +438,33 @@ class CodeForgeController implements DeltaTextInputClient {
         file.endsWith('.htm');
   }
 
+  int _autoClosePrevLength = 0, _autoClosePrevCursor = 0;
+
+  void _autoCloseTagListener() {
+    final currentLength = length;
+    final cursor = selection.extentOffset;
+    final typedOne =
+        currentLength == _autoClosePrevLength + 1 &&
+        cursor == _autoClosePrevCursor + 1;
+    _autoClosePrevLength = currentLength;
+    _autoClosePrevCursor = cursor;
+    if (!typedOne || !_isMarkupFile || _isDisposed) return;
+    final line = getLineAtOffset(cursor);
+    final column = cursor - getLineStartOffset(line);
+    if (column > 0 && getLineText(line)[column - 1] == '>') {
+      scheduleMicrotask(() => _autoCloseTag(cursor));
+    }
+  }
+
   /// After `>` closes an opening tag, adds its closing tag after the cursor.
   void _autoCloseTag(int cursor) {
     if (_isDisposed || readOnly || selection.extentOffset != cursor) return;
     if (cursor > length) return;
+    // A tag's attributes may span lines; a few lines back is plenty.
     final line = getLineAtOffset(cursor);
-    final column = cursor - getLineStartOffset(line);
-    final closing = closingTagFor(getLineText(line).substring(0, column));
+    final firstLine = max(0, line - 20);
+    final contextStart = getLineStartOffset(firstLine);
+    final closing = closingTagFor(text.substring(contextStart, cursor));
     if (closing == null) return;
     replaceRange(cursor, cursor, closing, preserveOldCursor: true);
     selection = TextSelection.collapsed(offset: cursor);
@@ -626,6 +650,12 @@ class CodeForgeController implements DeltaTextInputClient {
       stops = snippet.stops;
     }
     final indented = _indentContinuationLines(insertText, stops, start);
+    // Accepting `fn(` + `$1)` should open parameter hints like typing `(`;
+    // set before the edit so the editor sees it on the edit's notification.
+    final caret = indented.stops.isEmpty
+        ? indented.text.length
+        : indented.stops.first.start;
+    _signatureHelpRequested = caret > 0 && indented.text[caret - 1] == '(';
     replaceRange(start, end, indented.text);
     _startSnippet(indented.stops, start, start + indented.text.length);
 
@@ -656,6 +686,19 @@ class CodeForgeController implements DeltaTextInputClient {
   }
 
   void _startSnippet(List<SnippetStop> stops, int insertStart, int insertEnd) {
+    // Stops nested in an earlier placeholder would be wrong once that
+    // placeholder is typed over, so only the outer one is kept.
+    final kept = <SnippetStop>[];
+    for (final stop in stops) {
+      final nested = kept.any(
+        (outer) =>
+            outer.end > outer.start &&
+            stop.start >= outer.start &&
+            stop.end <= outer.end,
+      );
+      if (!nested) kept.add(stop);
+    }
+    stops = kept;
     _snippetRange = (
       startFromEnd: length - insertStart,
       endFromEnd: length - insertEnd,
@@ -706,11 +749,15 @@ class CodeForgeController implements DeltaTextInputClient {
     LspCompletion suggestion,
     int insertStart,
   ) async {
+    // The edits' positions are only valid while the text before the
+    // insertion stays the same (typing after it is fine).
+    final textBefore = text.substring(0, insertStart);
     var edits = suggestion.completionItem['additionalTextEdits'];
     if (edits is! List && suggestion.completionItem['data'] != null) {
       edits = (await resolveCompletion(suggestion))['additionalTextEdits'];
     }
     if (edits is! List || edits.isEmpty || _isDisposed) return;
+    if (!text.startsWith(textBefore)) return;
 
     // The edits were computed before the insertion, so only edits before it
     // (imports at the top) still have valid positions.

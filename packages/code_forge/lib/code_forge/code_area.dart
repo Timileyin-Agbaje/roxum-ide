@@ -635,7 +635,8 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
         });
       }
 
-      if (_controller.lastTypedCharacter == '(') {
+      if (_controller.lastTypedCharacter == '(' ||
+          _controller.consumeSignatureHelpRequest()) {
         _isSignatureInvoked = true;
       } else if (_controller.lastTypedCharacter == ')') {
         _isSignatureInvoked = false;

@@ -100,6 +100,11 @@ void main() {
     expect(closingTagFor('<button onClick={() => go(a > b)}>'), '</button>');
     expect(closingTagFor('<Foo.Bar>'), '</Foo.Bar>');
     expect(closingTagFor('(<>'), '</>');
+    expect(closingTagFor('<Input>'), '</Input>');
+    expect(
+      closingTagFor('<div\n  className="a"\n  onClick={() => go()}\n>'),
+      '</div>',
+    );
     for (final line in [
       '<Foo />',
       '</div>',
@@ -107,6 +112,8 @@ void main() {
       'useState<string>',
       'const a = b<c>',
       '<a href="x>',
+      'const s = "<div>',
+      '// see <div>',
     ]) {
       expect(closingTagFor(line), isNull, reason: line);
     }
