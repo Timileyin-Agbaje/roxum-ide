@@ -117,6 +117,7 @@ class CodeForgeController implements DeltaTextInputClient {
     String filePath,
     int line,
     int wordStart,
+    String prefix,
     bool isIncomplete,
     List<LspCompletion> items,
   })?
@@ -368,10 +369,10 @@ class CodeForgeController implements DeltaTextInputClient {
       // wait for typing to pause.
       if (isTypingLenMatch) {
         _onCharacterTyped(currentText, currentSelection.extentOffset);
-      } else if (!(isBackspace &&
-          _refilterCompletions(currentText, currentSelection.extentOffset))) {
-        _completionSession = null;
-        if (!_isDisposed) suggestionsNotifier.value = null;
+      } else if (isBackspace) {
+        _onBackspace(currentText, currentSelection.extentOffset);
+      } else {
+        _cancelCompletions();
       }
 
       _lspTypingTimer?.cancel();
@@ -415,7 +416,7 @@ class CodeForgeController implements DeltaTextInputClient {
     final prefix = getCurrentWordPrefix(currentText, cursorPosition);
 
     if (_isCompletionTriggerChar(typed)) {
-      _completionSession = null;
+      _cancelCompletions();
       _requestCompletions(
         prefix: '',
         line: line,
@@ -427,9 +428,35 @@ class CodeForgeController implements DeltaTextInputClient {
         _requestCompletions(prefix: prefix, line: line, character: character);
       }
     } else {
-      _completionSession = null;
-      suggestionsNotifier.value = null;
+      _cancelCompletions();
     }
+  }
+
+  /// Deleting inside a word re-filters, or asks again when the word got
+  /// shorter than the one the list was fetched for.
+  void _onBackspace(String currentText, int cursorPosition) {
+    if (_refilterCompletions(currentText, cursorPosition)) return;
+    final prefix = getCurrentWordPrefix(currentText, cursorPosition);
+    if (prefix.isEmpty || suggestionsNotifier.value == null) {
+      _cancelCompletions();
+      return;
+    }
+    final line = getLineAtOffset(cursorPosition);
+    _cancelCompletions();
+    _requestCompletions(
+      prefix: prefix,
+      line: line,
+      character: cursorPosition - getLineStartOffset(line),
+    );
+  }
+
+  /// Closes the popup and makes any reply still on its way be ignored.
+  void _cancelCompletions() {
+    _completionRequestId++;
+    _activeCompletionKey = null;
+    _queuedCompletionRequest = null;
+    _completionSession = null;
+    if (!_isDisposed) suggestionsNotifier.value = null;
   }
 
   /// Re-filters the current list when the cursor is still in the word it was
@@ -444,9 +471,11 @@ class CodeForgeController implements DeltaTextInputClient {
     final line = getLineAtOffset(cursorPosition);
     final character = cursorPosition - getLineStartOffset(line);
     final prefix = getCurrentWordPrefix(currentText, cursorPosition);
+    // A list fetched for "formatx" may lack items for "format".
     if (prefix.isEmpty ||
         line != session.line ||
-        character - prefix.length != session.wordStart) {
+        character - prefix.length != session.wordStart ||
+        !prefix.toLowerCase().startsWith(session.prefix.toLowerCase())) {
       return false;
     }
     _showCompletions(session.items, prefix);
@@ -562,22 +591,26 @@ class CodeForgeController implements DeltaTextInputClient {
       triggerCharacter: triggerCharacter,
     );
     if (_isDisposed || requestId != _completionRequestId) return;
-    _completionSession = (
-      filePath: filePath,
-      line: line,
-      wordStart: character - prefix.length,
-      isIncomplete: result.isIncomplete,
-      items: result.items,
-    );
-    // More of the word may have been typed while waiting.
+    // More of the word may have been typed while waiting; if the cursor left
+    // the word, the reply is no longer wanted.
     final cursor = selection.extentOffset;
     final currentPrefix = getCurrentWordPrefix(text, cursor);
     final stillInWord =
         getLineAtOffset(cursor) == line &&
         cursor - getLineStartOffset(line) - currentPrefix.length ==
             character - prefix.length;
-    _showCompletions(result.items, stillInWord ? currentPrefix : prefix);
-    completionLatency.value = stopwatch.elapsed;
+    if (stillInWord) {
+      _completionSession = (
+        filePath: filePath,
+        line: line,
+        wordStart: character - prefix.length,
+        prefix: prefix,
+        isIncomplete: result.isIncomplete,
+        items: result.items,
+      );
+      _showCompletions(result.items, currentPrefix);
+      completionLatency.value = stopwatch.elapsed;
+    }
 
     final pendingCompletion = _queuedCompletionRequest;
     _queuedCompletionRequest = null;
