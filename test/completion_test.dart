@@ -101,6 +101,8 @@ void main() {
     expect(closingTagFor('<Foo.Bar>'), '</Foo.Bar>');
     expect(closingTagFor('(<>'), '</>');
     expect(closingTagFor('<Input>'), '</Input>');
+    expect(closingTagFor('<BR>', isHtml: true), isNull);
+    expect(closingTagFor('<DIV>', isHtml: true), '</DIV>');
     expect(
       closingTagFor('<div\n  className="a"\n  onClick={() => go()}\n>'),
       '</div>',

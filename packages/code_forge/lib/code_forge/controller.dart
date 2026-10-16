@@ -464,7 +464,11 @@ class CodeForgeController implements DeltaTextInputClient {
     final line = getLineAtOffset(cursor);
     final firstLine = max(0, line - 20);
     final contextStart = getLineStartOffset(firstLine);
-    final closing = closingTagFor(text.substring(contextStart, cursor));
+    final file = openedFile?.toLowerCase() ?? '';
+    final closing = closingTagFor(
+      text.substring(contextStart, cursor),
+      isHtml: file.endsWith('.html') || file.endsWith('.htm'),
+    );
     if (closing == null) return;
     replaceRange(cursor, cursor, closing, preserveOldCursor: true);
     selection = TextSelection.collapsed(offset: cursor);

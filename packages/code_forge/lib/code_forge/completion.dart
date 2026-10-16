@@ -301,7 +301,10 @@ const _voidTags = {
 /// an opening tag: `<div className="a">` gives `</div>`, `<>` gives `</>`,
 /// while self-closing tags, void HTML tags, closing tags, generics like
 /// `useState<string>` and tags inside strings or `//` comments give null.
-String? closingTagFor(String textBeforeCursor) {
+///
+/// HTML tag names ignore case ([isHtml]); in JSX a capitalized name is a
+/// component, which is never void.
+String? closingTagFor(String textBeforeCursor, {bool isHtml = false}) {
   if (!textBeforeCursor.endsWith('>')) return null;
   final end = textBeforeCursor.length - 1;
   for (
@@ -314,7 +317,8 @@ String? closingTagFor(String textBeforeCursor) {
     if (_inStringOrLineComment(textBeforeCursor, start)) return null;
     // Lowercase names are HTML elements; capitalized ones (<Input>) are
     // components and always need a closing tag.
-    if (name == name.toLowerCase() && _voidTags.contains(name)) return null;
+    final isElement = isHtml || name == name.toLowerCase();
+    if (isElement && _voidTags.contains(name.toLowerCase())) return null;
     return '</$name>';
   }
   return null;
