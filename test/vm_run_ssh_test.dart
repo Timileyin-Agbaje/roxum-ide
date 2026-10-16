@@ -30,7 +30,10 @@ Future<String> _httpGet(String url) async {
   }
 }
 
-Future<void> _until(Future<bool> Function() condition, {Duration timeout = const Duration(seconds: 20)}) async {
+Future<void> _until(
+  Future<bool> Function() condition, {
+  Duration timeout = const Duration(seconds: 20),
+}) async {
   final started = DateTime.now();
   while (!await condition()) {
     if (DateTime.now().difference(started) > timeout) {
@@ -41,9 +44,18 @@ Future<void> _until(Future<bool> Function() condition, {Duration timeout = const
 }
 
 /// Runs [command] the way the app does: typed into an interactive SSH shell.
-Future<SSHSession> _runInShell(SSHInfo server, String command, StringBuffer output) async {
-  final session = await server.client!.shell(pty: const SSHPtyConfig(width: 200, height: 50));
-  session.stdout.cast<List<int>>().transform(const Utf8Decoder(allowMalformed: true)).listen(output.write);
+Future<SSHSession> _runInShell(
+  SSHInfo server,
+  String command,
+  StringBuffer output,
+) async {
+  final session = await server.client!.shell(
+    pty: const SSHPtyConfig(width: 200, height: 50),
+  );
+  session.stdout
+      .cast<List<int>>()
+      .transform(const Utf8Decoder(allowMalformed: true))
+      .listen(output.write);
   session.write(utf8.encode('$command\n'));
   return session;
 }
@@ -62,7 +74,12 @@ void main() {
     if (skip != null) return;
     manifests = await Directory.systemTemp.createTemp('roxum-manifests');
     VmProjectSync.manifestDir = manifests.path;
-    server = SSHPrivateKey(name: 'test vm', id: 4242, url: _url!, termuxKeyLoc: File(_key!));
+    server = SSHPrivateKey(
+      name: 'test vm',
+      id: 4242,
+      url: _url!,
+      termuxKeyLoc: File(_key!),
+    );
     final (ok, message) = await ensureVmConnected(server);
     expect(ok, isTrue, reason: message);
   });
@@ -70,14 +87,25 @@ void main() {
   setUp(() async {
     if (skip != null) return;
     final parent = await Directory.systemTemp.createTemp('roxum-it');
-    project = await Directory(path.join(parent.path, "it project ${DateTime.now().millisecondsSinceEpoch}")).create();
+    project = await Directory(
+      path.join(
+        parent.path,
+        "it project ${DateTime.now().millisecondsSinceEpoch}",
+      ),
+    ).create();
     sync = VmProjectSync(rootDir: project.path, server: server);
   });
 
   tearDown(() async {
     if (skip != null) return;
     await sync.clean();
-    expect(await _run(server, 'ls "\$HOME/.roxum/run-${sync.projectKey}.sh" 2>/dev/null || true'), isEmpty);
+    expect(
+      await _run(
+        server,
+        'ls "\$HOME/.roxum/run-${sync.projectKey}.sh" 2>/dev/null || true',
+      ),
+      isEmpty,
+    );
     await project.parent.delete(recursive: true);
   });
 
@@ -93,7 +121,8 @@ void main() {
     await file.writeAsString(content);
   }
 
-  String remote(String relative) => '${sync.remoteShellDir}/${shQuote(relative)}';
+  String remote(String relative) =>
+      '${sync.remoteShellDir}/${shQuote(relative)}';
 
   test('uploads only changed files and skips excluded folders', () async {
     await write('package.json', '{}');
@@ -109,8 +138,14 @@ void main() {
     expect(result.uploaded, 4);
     expect(await _run(server, 'cat ${remote('nested/deep/file.txt')}'), 'deep');
     expect(await _run(server, 'cat ${remote("it's here.js")}'), 'x');
-    final listing = (await _run(server, 'cd ${sync.remoteShellDir} && ls -A')).split('\n');
-    expect(listing, unorderedEquals(['package.json', 'src', 'nested', "it's here.js"]));
+    final listing = (await _run(
+      server,
+      'cd ${sync.remoteShellDir} && ls -A',
+    )).split('\n');
+    expect(
+      listing,
+      unorderedEquals(['package.json', 'src', 'nested', "it's here.js"]),
+    );
 
     result = await sync.sync();
     expect(result.uploaded, 0);
@@ -120,7 +155,10 @@ void main() {
     await write('src/index.ts', 'console.log(2)');
     result = await sync.sync();
     expect(result.uploaded, 1);
-    expect(await _run(server, 'cat ${remote('src/index.ts')}'), 'console.log(2)');
+    expect(
+      await _run(server, 'cat ${remote('src/index.ts')}'),
+      'console.log(2)',
+    );
 
     // A VM copy removed outside the app is uploaded again in full.
     await _run(server, 'rm -rf ${sync.remoteShellDir}');
@@ -128,19 +166,23 @@ void main() {
     expect(result.uploaded, 4);
   }, skip: skip);
 
-  test('force-uploads just-saved files even if size and timestamp match', () async {
-    await write('same.js', 'aaa');
-    await sync.sync();
-    final file = File(path.join(project.path, 'same.js'));
-    final modified = await file.lastModified();
-    await file.writeAsString('bbb');
-    await file.setLastModified(modified);
+  test(
+    'force-uploads just-saved files even if size and timestamp match',
+    () async {
+      await write('same.js', 'aaa');
+      await sync.sync();
+      final file = File(path.join(project.path, 'same.js'));
+      final modified = await file.lastModified();
+      await file.writeAsString('bbb');
+      await file.setLastModified(modified);
 
-    expect((await sync.sync()).uploaded, 0);
-    expect(await _run(server, 'cat ${remote('same.js')}'), 'aaa');
-    expect((await sync.sync(force: {file.path})).uploaded, 1);
-    expect(await _run(server, 'cat ${remote('same.js')}'), 'bbb');
-  }, skip: skip);
+      expect((await sync.sync()).uploaded, 0);
+      expect(await _run(server, 'cat ${remote('same.js')}'), 'aaa');
+      expect((await sync.sync(force: {file.path})).uploaded, 1);
+      expect(await _run(server, 'cat ${remote('same.js')}'), 'bbb');
+    },
+    skip: skip,
+  );
 
   test('never deletes remote files', () async {
     await write('a.js', 'a');
@@ -155,50 +197,107 @@ void main() {
     await write('package.json', '{}');
     await sync.sync();
     final types = VmTypesSync(sync);
-    final stamp = File(path.join(project.path, 'node_modules', VmTypesSync.stampName));
+    final stamp = File(
+      path.join(project.path, 'node_modules', VmTypesSync.stampName),
+    );
     expect(await types.update(), isFalse, reason: 'nothing installed yet');
 
-    await _run(server, 'cd ${sync.remoteShellDir} && mkdir -p node_modules/react node_modules/typescript node_modules/.bin && '
-        "echo '{}' > node_modules/react/package.json && echo 'export {};' > node_modules/react/index.d.ts && "
-        "echo 'x' > node_modules/react/index.js && echo '{}' > node_modules/typescript/package.json && "
-        "echo 'v1' > node_modules/.roxum-deps");
+    await _run(
+      server,
+      'cd ${sync.remoteShellDir} && mkdir -p node_modules/react node_modules/typescript node_modules/.bin && '
+      "echo '{}' > node_modules/react/package.json && echo 'export {};' > node_modules/react/index.d.ts && "
+      "echo 'x' > node_modules/react/index.js && echo '{}' > node_modules/typescript/package.json && "
+      'sha1sum package.json > node_modules/.roxum-deps',
+    );
+    final v1 = await _run(server, 'cat ${remote('node_modules/.roxum-deps')}');
     expect(await types.update(), isTrue);
-    expect(File(path.join(project.path, 'node_modules', 'react', 'index.d.ts')).readAsStringSync().trim(), 'export {};');
-    expect(File(path.join(project.path, 'node_modules', 'react', 'index.js')).existsSync(), isFalse);
-    expect(Directory(path.join(project.path, 'node_modules', 'typescript')).existsSync(), isFalse);
-    expect(stamp.readAsStringSync(), 'v1');
-    expect(await _run(server, 'ls "\$HOME"/.roxum/types-* 2>/dev/null || true'), isEmpty);
+    expect(
+      File(path.join(project.path, 'node_modules', 'react', 'index.d.ts'))
+          .readAsStringSync()
+          .trim(),
+      'export {};',
+    );
+    expect(
+      File(path.join(project.path, 'node_modules', 'react', 'index.js'))
+          .existsSync(),
+      isFalse,
+    );
+    expect(
+      Directory(path.join(project.path, 'node_modules', 'typescript'))
+          .existsSync(),
+      isFalse,
+    );
+    expect(stamp.readAsStringSync(), v1);
+    expect(
+      await _run(server, 'ls "\$HOME"/.roxum/types-* 2>/dev/null || true'),
+      isEmpty,
+    );
 
     expect(await types.update(), isFalse, reason: 'unchanged');
-    await _run(server, "cd ${sync.remoteShellDir} && echo 'v2' > node_modules/.roxum-deps");
+    // package.json changed but not installed yet: the old stamp no longer counts.
+    await _run(
+      server,
+      "cd ${sync.remoteShellDir} && echo '{\"a\": 1}' > package.json",
+    );
+    expect(await types.update(), isFalse, reason: 'install pending');
+    await _run(
+      server,
+      'cd ${sync.remoteShellDir} && sha1sum package.json > node_modules/.roxum-deps',
+    );
     expect(await types.update(), isTrue);
-    expect(stamp.readAsStringSync(), 'v2');
+    expect(stamp.readAsStringSync(), isNot(v1));
 
     // A real install on the phone (no stamp) is left alone.
     await stamp.delete();
-    await _run(server, "cd ${sync.remoteShellDir} && echo 'v3' > node_modules/.roxum-deps");
+    await _run(
+      server,
+      "cd ${sync.remoteShellDir} && echo '{}' > package.json && sha1sum package.json > node_modules/.roxum-deps",
+    );
     expect(await types.update(), isFalse);
   }, skip: skip);
 
-  test('runs JavaScript and TypeScript files on the VM', () async {
-    await write('hello.js', 'console.log("hello from " + require("os").hostname())');
-    await write('src/typed.ts', 'const n: number = 6 * 7; console.log(`answer \${n}`)');
-    await sync.sync();
+  test(
+    'runs JavaScript and TypeScript files on the VM',
+    () async {
+      await write(
+        'hello.js',
+        'console.log("hello from " + require("os").hostname())',
+      );
+      await write(
+        'src/typed.ts',
+        'const n: number = 6 * 7; console.log(`answer \${n}`)',
+      );
+      await sync.sync();
 
-    final js = await VmRunPlan.forFile(project.path, path.join(project.path, 'hello.js'));
-    final jsCommand = await sync.prepareRunCommand(js!.body);
-    final hostname = await _run(server, 'hostname');
-    expect(await _run(server, jsCommand), 'hello from $hostname');
+      final js = await VmRunPlan.forFile(
+        project.path,
+        path.join(project.path, 'hello.js'),
+      );
+      final jsCommand = await sync.prepareRunCommand(js!.body);
+      final hostname = await _run(server, 'hostname');
+      expect(await _run(server, jsCommand), 'hello from $hostname');
 
-    final ts = await VmRunPlan.forFile(project.path, path.join(project.path, 'src/typed.ts'));
-    final tsCommand = await sync.prepareRunCommand(ts!.body);
-    expect(await _run(server, tsCommand), endsWith('answer 42'));
-  }, timeout: const Timeout(Duration(minutes: 3)), skip: skip);
+      final ts = await VmRunPlan.forFile(
+        project.path,
+        path.join(project.path, 'src/typed.ts'),
+      );
+      final tsCommand = await sync.prepareRunCommand(ts!.body);
+      expect(await _run(server, tsCommand), endsWith('answer 42'));
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+    skip: skip,
+  );
 
   test('Ctrl+C in the shell ends the run and the shell stays usable', () async {
-    await write('forever.js', 'console.log("started"); setInterval(() => {}, 1000)');
+    await write(
+      'forever.js',
+      'console.log("started"); setInterval(() => {}, 1000)',
+    );
     await sync.sync();
-    final plan = await VmRunPlan.forFile(project.path, path.join(project.path, 'forever.js'));
+    final plan = await VmRunPlan.forFile(
+      project.path,
+      path.join(project.path, 'forever.js'),
+    );
     final command = await sync.prepareRunCommand(plan!.body);
 
     final output = StringBuffer();
@@ -209,78 +308,124 @@ void main() {
     expect(await _run(server, 'pgrep -g $group | wc -l'), isNot('0'));
 
     session.write(utf8.encode('\x03'));
-    await _until(() async => await _run(server, 'test -f $pidFile && echo yes || echo no') == 'no');
-    await _until(() async => await _run(server, 'pgrep -g $group | wc -l') == '0');
+    await _until(
+      () async =>
+          await _run(server, 'test -f $pidFile && echo yes || echo no') == 'no',
+    );
+    await _until(
+      () async => await _run(server, 'pgrep -g $group | wc -l') == '0',
+    );
 
     session.write(utf8.encode('echo shell-alive-\$((40+2))\n'));
     await _until(() async => output.toString().contains('shell-alive-42'));
     session.close();
   }, skip: skip);
 
-  test('stop command ends a run that ignores Ctrl+C, children included', () async {
-    await write('stubborn.js', '''
+  test(
+    'stop command ends a run that ignores Ctrl+C, children included',
+    () async {
+      await write('stubborn.js', '''
 process.on("SIGINT", () => console.log("ignoring SIGINT"));
 require("child_process").spawn("sleep", ["300"], { stdio: "ignore" });
 console.log("started");
 setInterval(() => {}, 1000);
 ''');
-    await sync.sync();
-    final plan = await VmRunPlan.forFile(project.path, path.join(project.path, 'stubborn.js'));
-    final command = await sync.prepareRunCommand(plan!.body);
+      await sync.sync();
+      final plan = await VmRunPlan.forFile(
+        project.path,
+        path.join(project.path, 'stubborn.js'),
+      );
+      final command = await sync.prepareRunCommand(plan!.body);
 
-    final output = StringBuffer();
-    final session = await _runInShell(server, command, output);
-    await _until(() async => output.toString().contains('started'));
-    final group = await _run(server, 'cat "\$HOME"/.roxum/run-${sync.projectKey}.pid');
-    // node, its sleep child and the run script share the group.
-    expect(int.parse(await _run(server, 'pgrep -g $group | wc -l')), greaterThanOrEqualTo(3));
+      final output = StringBuffer();
+      final session = await _runInShell(server, command, output);
+      await _until(() async => output.toString().contains('started'));
+      final group = await _run(
+        server,
+        'cat "\$HOME"/.roxum/run-${sync.projectKey}.pid',
+      );
+      // node, its sleep child and the run script share the group.
+      expect(
+        int.parse(await _run(server, 'pgrep -g $group | wc -l')),
+        greaterThanOrEqualTo(3),
+      );
 
-    session.write(utf8.encode('\x03'));
-    await _until(() async => output.toString().contains('ignoring SIGINT'));
-    expect(await _run(server, 'pgrep -g $group | wc -l'), isNot('0'));
+      session.write(utf8.encode('\x03'));
+      await _until(() async => output.toString().contains('ignoring SIGINT'));
+      expect(await _run(server, 'pgrep -g $group | wc -l'), isNot('0'));
 
-    await _run(server, sync.stopCommand);
-    expect(await _run(server, 'pgrep -g $group | wc -l'), '0');
-    session.close();
-  }, skip: skip);
+      await _run(server, sync.stopCommand);
+      expect(await _run(server, 'pgrep -g $group | wc -l'), '0');
+      session.close();
+    },
+    skip: skip,
+  );
 
-  test('Vite dev server: install once, preview through the tunnel, sync on save', () async {
-    await write('package.json', jsonEncode({
-      'name': 'roxum-it',
-      'private': true,
-      'scripts': {'dev': 'vite'},
-      'devDependencies': {'vite': '^6.0.0'},
-    }));
-    await write('index.html', '<!doctype html><html><body><h1>first version</h1></body></html>');
+  test(
+    'Vite dev server: install once, preview through the tunnel, sync on save',
+    () async {
+      await write(
+        'package.json',
+        jsonEncode({
+          'name': 'roxum-it',
+          'private': true,
+          'scripts': {'dev': 'vite'},
+          'devDependencies': {'vite': '^6.0.0'},
+        }),
+      );
+      await write(
+        'index.html',
+        '<!doctype html><html><body><h1>first version</h1></body></html>',
+      );
 
-    final session = VmSession(project.path);
-    addTearDown(session.dispose);
-    await session.sync(server);
-    final plan = (await VmRunPlan.forFile(project.path, path.join(project.path, 'index.html')))!;
-    expect(plan.isViteDevServer, isTrue);
-    final command = await sync.prepareRunCommand(plan.body);
+      final session = VmSession(project.path);
+      addTearDown(session.dispose);
+      await session.sync(server);
+      final plan = (await VmRunPlan.forFile(
+        project.path,
+        path.join(project.path, 'index.html'),
+      ))!;
+      expect(plan.isViteDevServer, isTrue);
+      final command = await sync.prepareRunCommand(plan.body);
 
-    final output = StringBuffer();
-    final shell = await _runInShell(server, command, output);
-    final url = await session.startDevServerTunnel(server, timeout: const Duration(minutes: 4));
-    expect(url, isNotNull, reason: output.toString());
-    expect(output.toString(), contains('added'));
-    expect(await _httpGet(url!), contains('first version'));
+      final output = StringBuffer();
+      final shell = await _runInShell(server, command, output);
+      final url = await session.startDevServerTunnel(
+        server,
+        timeout: const Duration(minutes: 4),
+      );
+      expect(url, isNotNull, reason: output.toString());
+      expect(output.toString(), contains('added'));
+      expect(await _httpGet(url!), contains('first version'));
 
-    // Saving a file syncs it while the dev server runs.
-    await write('index.html', '<!doctype html><html><body><h1>second version</h1></body></html>');
-    VmSaveEvents.notifySaved(path.join(project.path, 'index.html'));
-    await _until(() async => (await _httpGet(url)).contains('second version'));
+      // Saving a file syncs it while the dev server runs.
+      await write(
+        'index.html',
+        '<!doctype html><html><body><h1>second version</h1></body></html>',
+      );
+      VmSaveEvents.notifySaved(path.join(project.path, 'index.html'));
+      await _until(
+        () async => (await _httpGet(url)).contains('second version'),
+      );
 
-    // Dependencies are installed once.
-    expect(
-      await _run(server, 'cd ${sync.remoteShellDir} && sha1sum --status -c node_modules/.roxum-deps && echo current'),
-      'current',
-    );
+      // Dependencies are installed once.
+      expect(
+        await _run(
+          server,
+          'cd ${sync.remoteShellDir} && sha1sum --status -c node_modules/.roxum-deps && echo current',
+        ),
+        'current',
+      );
 
-    // Stopping the dev server closes the tunnel.
-    shell.write(utf8.encode('\x03'));
-    await _until(() async => !session.isDevServerRunning, timeout: const Duration(seconds: 30));
-    shell.close();
-  }, timeout: const Timeout(Duration(minutes: 6)), skip: skip);
+      // Stopping the dev server closes the tunnel.
+      shell.write(utf8.encode('\x03'));
+      await _until(
+        () async => !session.isDevServerRunning,
+        timeout: const Duration(seconds: 30),
+      );
+      shell.close();
+    },
+    timeout: const Timeout(Duration(minutes: 6)),
+    skip: skip,
+  );
 }

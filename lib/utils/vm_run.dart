@@ -82,6 +82,7 @@ class VmSyncResult {
 class VmProjectSync {
   static const excludedDirs = {
     'node_modules', '.git', 'dist', 'build', '.vite', '.next', 'coverage',
+    typesStagingDir,
   };
   static const maxFiles = 5000;
 
@@ -351,12 +352,17 @@ class VmTypesSync {
     if (client == null || client.isClosed) return false;
 
     final localStamp = File(path.join(_modulesDir, stampName));
+    final staging = Directory(path.join(project.rootDir, typesStagingDir));
+    if (await staging.exists()) await staging.delete(recursive: true);
     // node_modules without our stamp is a real install on the phone: keep it.
     if (await Directory(_modulesDir).exists() && !await localStamp.exists()) {
       return false;
     }
+    // Only a stamp that still matches package.json and the lockfile counts;
+    // otherwise an install is pending or running.
+    final checkStamp = 'sha1sum --status -c node_modules/.roxum-deps 2>/dev/null';
     final remoteStamp = utf8.decode(await client.run(
-      'cat ${project.remoteShellDir}/node_modules/.roxum-deps 2>/dev/null',
+      'cd ${project.remoteShellDir} && $checkStamp && cat node_modules/.roxum-deps',
       stderr: false,
     )).trim();
     if (remoteStamp.isEmpty) return false;
@@ -366,10 +372,11 @@ class VmTypesSync {
     onCopying?.call();
 
     final packed = utf8.decode(await client.run(
-      'mkdir -p "\$HOME/.roxum" && cd ${project.remoteShellDir} && '
+      'mkdir -p "\$HOME/.roxum" && cd ${project.remoteShellDir} && $checkStamp && '
       'find node_modules -path node_modules/typescript -prune -o -type f '
       "\\( -name package.json -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' \\) -print0 "
-      '| tar -czf $_archive --null -T - && echo packed',
+      '| tar -czf $_archive --null -T - && $checkStamp && '
+      '[ "\$(cat node_modules/.roxum-deps)" = ${shQuote(remoteStamp)} ] && echo packed',
       stderr: false,
     ));
     if (!packed.contains('packed')) {
@@ -398,21 +405,29 @@ class VmTypesSync {
 }
 
 /// Replaces `<projectDir>/node_modules` with the files in the gzipped tar
-/// [bytes] (paths under node_modules only) and writes the stamp last.
+/// [bytes] (paths under node_modules only). It extracts into a temporary
+/// folder with the stamp and swaps it in at the end, so an interrupted copy
+/// never leaves a stamp-less node_modules that looks like a real install.
 Future<void> extractTypesArchive(Uint8List bytes, String projectDir, String stamp) async {
   final archive = TarDecoder().decodeBytes(const GZipDecoder().decodeBytes(bytes));
-  final modules = Directory(path.join(projectDir, 'node_modules'));
-  if (await modules.exists()) await modules.delete(recursive: true);
+  final staging = Directory(path.join(projectDir, typesStagingDir));
+  if (await staging.exists()) await staging.delete(recursive: true);
   for (final entry in archive) {
     final relative = safeTypesEntryPath(entry.name);
     if (relative == null || !entry.isFile || entry.isSymbolicLink) continue;
-    final file = File(path.join(projectDir, relative));
+    final file = File(path.join(staging.path, path.relative(relative, from: 'node_modules')));
     await file.parent.create(recursive: true);
     await file.writeAsBytes(entry.content);
   }
-  await modules.create(recursive: true);
-  await File(path.join(modules.path, VmTypesSync.stampName)).writeAsString(stamp);
+  await staging.create(recursive: true);
+  await File(path.join(staging.path, VmTypesSync.stampName)).writeAsString(stamp);
+  final modules = Directory(path.join(projectDir, 'node_modules'));
+  if (await modules.exists()) await modules.delete(recursive: true);
+  await staging.rename(modules.path);
 }
+
+/// Where [extractTypesArchive] builds the new copy before swapping it in.
+const typesStagingDir = '.roxum-types-tmp';
 
 /// The local relative path for an archive entry, or null unless it stays
 /// inside node_modules.
@@ -570,6 +585,8 @@ class VmSession {
   VmPreviewTunnel? _tunnel;
   StreamSubscription<String>? _saveSubscription;
   Timer? _saveDebounce, _watchTimer, _statusClear, _typesTimer;
+  int _typesWatch = 0;
+  Future<void> _typesCopy = Future.value();
   Future<void> _syncChain = Future.value();
   final Set<String> _savedSinceSync = {};
   bool _disposed = false;
@@ -697,16 +714,24 @@ class VmSession {
     Duration timeout = const Duration(minutes: 10),
   }) {
     _typesTimer?.cancel();
+    final watch = ++_typesWatch;
     final types = VmTypesSync(syncFor(server));
     final started = DateTime.now();
     var busy = false;
     Future<void> check() async {
-      if (busy || _disposed) return;
+      if (busy || _disposed || watch != _typesWatch) return;
       busy = true;
+      // One copy at a time, even across Play presses.
+      final previous = _typesCopy;
+      final done = Completer<void>();
+      _typesCopy = done.future;
       try {
+        await previous;
+        if (watch != _typesWatch || _disposed) return;
         final copied = await types.update(
           onCopying: () => _setStatus(VmStatus('Copying package types from ${server.name}…')),
         );
+        if (watch != _typesWatch) return;
         if (copied) {
           _typesTimer?.cancel();
           _setStatus(VmStatus('Package types copied from ${server.name}'),
@@ -716,11 +741,13 @@ class VmSession {
           _typesTimer?.cancel();
         }
       } catch (e) {
+        if (watch != _typesWatch) return;
         _typesTimer?.cancel();
         _setStatus(VmStatus('Could not copy package types: $e', isError: true),
             clearAfter: const Duration(seconds: 8));
       } finally {
         busy = false;
+        done.complete();
       }
     }
 
