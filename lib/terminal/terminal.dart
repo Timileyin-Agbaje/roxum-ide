@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../bloc/ui_bloc/ui_bloc.dart';
+import 'command_output.dart';
 import '../utils/constants.dart';
 import '../utils/functions.dart';
 import '../utils/themes.dart';
@@ -252,6 +253,56 @@ class TerminalRuntime {
     return pty != null;
   }
 
+  /// Lines where Enter was sent, so a command's output can be found later.
+  /// BufferLine keeps its index current as old lines scroll away.
+  final List<BufferLine> _commandLines = [];
+
+  /// Records Enter in what the user sends, before it reaches the shell.
+  void noteInput(String data) {
+    if (!data.contains('\r') && !data.contains('\n')) return;
+    final buffer = terminal.buffer;
+    _commandLines.add(buffer.lines[buffer.absoluteCursorY]);
+    if (_commandLines.length > 500) _commandLines.removeAt(0);
+  }
+
+  /// Sends [data] to the phone shell or the SSH session.
+  void write(String data) {
+    noteInput(data);
+    final bytes = utf8.encode(data);
+    if (pty != null) {
+      pty!.write(bytes);
+    } else {
+      sshSession?.write(bytes);
+    }
+  }
+
+  List<int> get _commandLineIndexes => [
+    for (final line in _commandLines)
+      if (line.attached) line.index,
+  ];
+
+  String _text(int start, int end) {
+    final lines = terminal.buffer.lines;
+    return joinTerminalLines([
+      for (var i = start; i <= end && i < lines.length; i++)
+        (text: lines[i].getText(), isWrapped: lines[i].isWrapped),
+    ]);
+  }
+
+  /// The output of the command whose block contains buffer [line].
+  String? outputAt(int line) {
+    final range = commandOutputRange(_commandLineIndexes, line, terminal.buffer.absoluteCursorY);
+    return range == null ? null : _text(range.start, range.end);
+  }
+
+  String? get lastOutput {
+    final range = lastCommandOutputRange(_commandLineIndexes, terminal.buffer.absoluteCursorY);
+    return range == null ? null : _text(range.start, range.end);
+  }
+
+  /// The whole session, scrollback included.
+  String get allText => _text(0, terminal.buffer.lines.length - 1);
+
   void stopProcess() {
     if(sshSession != null){
       // Interrupt the foreground program; the remote shell stays open.
@@ -300,6 +351,19 @@ class _SetupTerminalState extends State<SetupTerminal> {
 
   OverlayEntry? _selectionToolbarOverlay;
   bool _hasSelection = false;
+  Timer? _copyOnSelectTimer;
+  String? _lastAutoCopied;
+
+  void _copyText(String? text) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    if (text == null || text.trim().isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('Nothing to copy'), duration: Duration(seconds: 1)));
+      return;
+    }
+    Clipboard.setData(ClipboardData(text: text));
+    messenger.showSnackBar(const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)));
+  }
 
   final ValueNotifier<List<String>?> _suggestionsNotifier = ValueNotifier(null);
   final ScrollController _suggestionScrollController = ScrollController();
@@ -355,6 +419,18 @@ class _SetupTerminalState extends State<SetupTerminal> {
     if (runtime == null) return;
 
     final hasSelection = runtime.controller.selection != null;
+    // Copy a selection once it stops changing.
+    _copyOnSelectTimer?.cancel();
+    if (hasSelection) {
+      _copyOnSelectTimer = Timer(const Duration(milliseconds: 700), () {
+        final selection = runtime.controller.selection;
+        if (selection == null || !mounted) return;
+        final text = runtime.terminal.buffer.getText(selection);
+        if (text.trim().isEmpty || text == _lastAutoCopied) return;
+        _lastAutoCopied = text;
+        _copyText(text);
+      });
+    }
     if (hasSelection != _hasSelection) {
       _hasSelection = hasSelection;
       if (hasSelection) {
@@ -391,7 +467,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
     final runtime = TerminalRuntime(
       sessionId: id,
       title: sessionTitle,
-      terminal: Terminal(platform: TerminalTargetPlatform.android),
+      terminal: Terminal(platform: TerminalTargetPlatform.android, maxLines: 5000),
       controller: TerminalController(selectionMode: SelectionMode.block),
     );
 
@@ -433,7 +509,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
     final runtime = TerminalRuntime(
       sessionId: meta.id,
       title: meta.title,
-      terminal: Terminal(platform: TerminalTargetPlatform.android),
+      terminal: Terminal(platform: TerminalTargetPlatform.android, maxLines: 5000),
       controller: TerminalController(selectionMode: SelectionMode.block),
     );
     runtime.selectionListener = () => _onSelectionChanged(meta.id);
@@ -455,6 +531,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
     final process = runtime.pty;
     if (process != null) {
       runtime.terminal.onOutput = (data) {
+        runtime.noteInput(data);
         if (widget.readOnly) return;
         process.write(const Utf8Encoder().convert(data));
         if (_sessionBloc.state.activeSessionId == id) {
@@ -464,6 +541,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
       runtime.terminal.onResize = (w, h, pw, ph) => process.resize(h, w);
     } else if (runtime.sshSession != null) {
       runtime.terminal.onOutput = (data) {
+        runtime.noteInput(data);
         runtime.sshSession!.write(utf8.encode(data));
       };
       runtime.terminal.onResize = (w, h, pw, ph) {
@@ -630,6 +708,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
       }
 
       terminal.onOutput = (data) {
+        runtime.noteInput(data);
         session.write(utf8.encode(data));
       };
 
@@ -711,6 +790,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
     });
 
     runtime.terminal.onOutput = (data) {
+      runtime.noteInput(data);
       if (widget.readOnly) {
         return;
       }
@@ -921,6 +1001,22 @@ class _SetupTerminalState extends State<SetupTerminal> {
                       color: const Color(0xff454545),
                     ),
                     _toolbarButton(
+                      icon: Icons.notes,
+                      label: 'Copy output',
+                      onTap: () {
+                        final selection = runtime.controller.selection;
+                        _copyText(
+                          selection == null ? null : runtime.outputAt(selection.begin.y),
+                        );
+                        runtime.controller.clearSelection();
+                      },
+                    ),
+                    Container(
+                      width: 1,
+                      height: 24,
+                      color: const Color(0xff454545),
+                    ),
+                    _toolbarButton(
                       icon: Icons.paste,
                       label: AppLocalizations.of(context)!.paste,
                       onTap: () async {
@@ -928,9 +1024,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
                           Clipboard.kTextPlain,
                         );
                         if (data?.text != null) {
-                          runtime.pty?.write(
-                            const Utf8Encoder().convert(data!.text!),
-                          );
+                          runtime.write(data!.text!);
                         }
                         runtime.controller.clearSelection();
                       },
@@ -951,10 +1045,8 @@ class _SetupTerminalState extends State<SetupTerminal> {
                               )
                             : '';
                         if (selectedText.isNotEmpty) {
-                          runtime.pty?.write(
-                            const Utf8Encoder().convert(
-                              'grep -r "${selectedText.replaceAll('"', '\\"')}" .',
-                            ),
+                          runtime.write(
+                            'grep -r "${selectedText.replaceAll('"', '\\"')}" .',
                           );
                         }
                         runtime.controller.clearSelection();
@@ -1023,8 +1115,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
   }
 
   void sendToPty(String sequence) {
-    final runtime = _activeRuntime();
-    runtime?.pty?.write(const Utf8Encoder().convert(sequence));
+    _activeRuntime()?.write(sequence);
   }
 
   void _setTerminalOutputWithAutocomplete({
@@ -1034,10 +1125,13 @@ class _SetupTerminalState extends State<SetupTerminal> {
     VoidCallback? resetCallback,
   }) {
     final runtime = _activeRuntime();
-    final process = runtime?.pty;
-    if (runtime == null || process == null) return;
+    // CTRL/ALT/SHIFT work for phone and SSH (VM) sessions alike.
+    if (runtime == null || (runtime.pty == null && runtime.sshSession == null)) {
+      return;
+    }
 
     runtime.terminal.onOutput = (data) {
+      runtime.noteInput(data);
       String sequence = '';
 
       if (ctrl) {
@@ -1056,8 +1150,13 @@ class _SetupTerminalState extends State<SetupTerminal> {
       }
 
       if (sequence.isNotEmpty) {
-        process.write(const Utf8Encoder().convert(sequence));
-        _handleInputForAutocomplete(runtime, sequence);
+        final process = runtime.pty;
+        if (process != null) {
+          process.write(const Utf8Encoder().convert(sequence));
+          _handleInputForAutocomplete(runtime, sequence);
+        } else {
+          runtime.sshSession?.write(utf8.encode(sequence));
+        }
       }
 
       if ((ctrl || alt || shift) && resetCallback != null) {
@@ -1069,6 +1168,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
 
   @override
   void dispose() {
+    _copyOnSelectTimer?.cancel();
     _hideSelectionToolbar();
     _suggestionsNotifier.dispose();
     _suggestionScrollController.dispose();
@@ -1247,6 +1347,69 @@ class _SetupTerminalState extends State<SetupTerminal> {
         );
       },
     );
+  }
+
+  /// Sessions as tabs under the app bar; long-press a tab to restart, stop or
+  /// delete it.
+  PreferredSizeWidget _buildSessionTabs(TerminalSessionState state, AppTheme appTheme) {
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(36),
+      child: SizedBox(
+        height: 36,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          children: [
+            for (final session in state.sessions)
+              Builder(
+                builder: (tabContext) {
+                  final isActive = session.id == state.activeSessionId;
+                  return GestureDetector(
+                    onTap: () => _sessionBloc.add(SetActiveTerminalSession(session.id)),
+                    onLongPressStart: (details) => _showSessionMenu(session, details.globalPosition),
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 4, bottom: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: isActive ? appTheme.editorPageToolSelectedBgColor : Colors.transparent,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        session.isRunning ? session.title : '${session.title} (stopped)',
+                        style: TextStyle(
+                          color: isActive ? appTheme.selectScreenCardTextColor : appTheme.editorPageToolColor,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSessionMenu(TerminalSessionMeta session, Offset position) async {
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
+      items: [
+        const PopupMenuItem(value: 'restart', child: Text('Restart')),
+        PopupMenuItem(value: 'stop', enabled: session.isRunning, child: const Text('Stop')),
+        const PopupMenuItem(value: 'delete', child: Text('Delete')),
+      ],
+    );
+    switch (action) {
+      case 'restart':
+        await _restartSession(session.id);
+      case 'stop':
+        _terminateSession(session.id);
+      case 'delete':
+        _deleteSession(session.id);
+    }
   }
 
   Widget _buildSessionDrawer(TerminalSessionState state, AppTheme appTheme) {
@@ -1436,7 +1599,8 @@ class _SetupTerminalState extends State<SetupTerminal> {
 
           return Scaffold(
             appBar: AppBar(
-              leading: Builder(
+              bottom: kTerminalSessionTabs ? _buildSessionTabs(state, appTheme) : null,
+              leading: kTerminalSessionTabs ? null : Builder(
                 builder: (context) {
                   final sessionCount = state.sessions.length;
                   return Stack(
@@ -1486,11 +1650,11 @@ class _SetupTerminalState extends State<SetupTerminal> {
                 ),
               ),
               actions: [
-                IconButton(
+                if (!kTerminalSessionTabs) IconButton(
                   onPressed: () => _onTerminalFontSizeChanged(state.fontSize - 1),
                   icon: Icon(Icons.zoom_out)
                 ),
-                IconButton(
+                if (!kTerminalSessionTabs) IconButton(
                   onPressed: () => _onTerminalFontSizeChanged(state.fontSize + 1),
                   icon: Icon(Icons.zoom_in)
                 ),
@@ -1582,9 +1746,21 @@ class _SetupTerminalState extends State<SetupTerminal> {
                     ],
                   ),
                 ),
+                if (kTerminalSessionTabs)
+                  PopupMenuButton<VoidCallback>(
+                    tooltip: 'More',
+                    onSelected: (action) => action(),
+                    itemBuilder: (context) => [
+                      PopupMenuItem(value: () => _copyText(activeRuntime?.lastOutput), child: const Text('Copy last output')),
+                      PopupMenuItem(value: () => _copyText(activeRuntime?.allText), child: const Text('Copy all')),
+                      const PopupMenuDivider(),
+                      PopupMenuItem(value: () => _onTerminalFontSizeChanged(state.fontSize + 1), child: const Text('Zoom in')),
+                      PopupMenuItem(value: () => _onTerminalFontSizeChanged(state.fontSize - 1), child: const Text('Zoom out')),
+                    ],
+                  ),
               ],
             ),
-            drawer: _buildSessionDrawer(state, appTheme),
+            drawer: kTerminalSessionTabs ? null : _buildSessionDrawer(state, appTheme),
             body: terminalContent,
           );
         },
@@ -1671,86 +1847,53 @@ class _TerminalKeyboardMenuState extends State<TerminalKeyboardMenu> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    Widget key(String label, VoidCallback onTap, {bool active = false, IconData? icon}) => Expanded(
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          height: 36,
+          alignment: Alignment.center,
+          color: active ? scheme.onSurface.withValues(alpha: 0.2) : null,
+          child: icon != null
+              ? Icon(icon, size: 18, color: scheme.onSurface)
+              : Text(
+                  label,
+                  style: TextStyle(
+                    color: active ? Colors.yellow : scheme.onSurface,
+                    fontSize: 13,
+                    fontFamily: 'jetBrainsMono',
+                  ),
+                ),
+        ),
+      ),
+    );
+    void send(String sequence) => widget.onSendSequence(sequence);
     return Container(
-      color: const Color(0xff181818),
+      color: scheme.surfaceContainerLow,
       child: Column(
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              TextButton(
-                onPressed: _toggleCtrl,
-                style: TextButton.styleFrom(
-                  foregroundColor: isCtrlActive ? Colors.yellow : Colors.white,
-                  backgroundColor: isCtrlActive
-                      ? Colors.white.withValues(alpha: 0.2)
-                      : Colors.transparent,
-                ),
-                child: const Text("CTRL"),
-              ),
-              TextButton(
-                onPressed: _toggleAlt,
-                style: TextButton.styleFrom(
-                  foregroundColor: isAltActive ? Colors.yellow : Colors.white,
-                  backgroundColor: isAltActive
-                      ? Colors.white.withValues(alpha: 0.2)
-                      : Colors.transparent,
-                ),
-                child: const Text("ALT"),
-              ),
-              TextButton(
-                onPressed: () => widget.onSendSequence('\x1b[H'),
-                style: TextButton.styleFrom(foregroundColor: Colors.white),
-                child: const Text("HOME"),
-              ),
-              IconButton(
-                onPressed: () => widget.onSendSequence('\x1b[A'),
-                color: Colors.white,
-                icon: const Icon(Icons.arrow_upward),
-              ),
-              TextButton(
-                onPressed: () => widget.onSendSequence('\x1b[F'),
-                style: TextButton.styleFrom(foregroundColor: Colors.white),
-                child: const Text("END"),
-              ),
+              key('ESC', () => send('\x1b')),
+              key('TAB', () => send('\t')),
+              key('CTRL', _toggleCtrl, active: isCtrlActive),
+              key('ALT', _toggleAlt, active: isAltActive),
+              key('SHIFT', _toggleShift, active: isShiftActive),
+              key('HOME', () => send('\x1b[H')),
+              key('↑', () => send('\x1b[A'), icon: Icons.arrow_upward),
+              key('END', () => send('\x1b[F')),
             ],
           ),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              TextButton(
-                onPressed: () => widget.onSendSequence('\x1b'),
-                style: TextButton.styleFrom(foregroundColor: Colors.white),
-                child: const Text("ESC"),
-              ),
-              TextButton(
-                onPressed: _toggleShift,
-                style: TextButton.styleFrom(
-                  foregroundColor: isShiftActive ? Colors.yellow : Colors.white,
-                  backgroundColor: isShiftActive
-                      ? Colors.white.withValues(alpha: 0.2)
-                      : Colors.transparent,
-                ),
-                child: const Text("SHIFT"),
-              ),
-              IconButton(
-                onPressed: () => widget.onSendSequence('\x1b[D'),
-                color: Colors.white,
-                icon: const Icon(Icons.arrow_back),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: IconButton(
-                  onPressed: () => widget.onSendSequence('\x1b[B'),
-                  color: Colors.white,
-                  icon: const Icon(Icons.arrow_downward),
-                ),
-              ),
-              IconButton(
-                onPressed: () => widget.onSendSequence('\x1b[C'),
-                color: Colors.white,
-                icon: const Icon(Icons.arrow_forward),
-              ),
+              key('|', () => send('|')),
+              key('-', () => send('-')),
+              key('/', () => send('/')),
+              key('~', () => send('~')),
+              key('←', () => send('\x1b[D'), icon: Icons.arrow_back),
+              key('↓', () => send('\x1b[B'), icon: Icons.arrow_downward),
+              key('→', () => send('\x1b[C'), icon: Icons.arrow_forward),
             ],
           ),
         ],

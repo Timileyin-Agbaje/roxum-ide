@@ -22,3 +22,5 @@ const kHomeExtraButtonsEnabled = false;
 
 // Folders the file tree doesn't show. node_modules holds the types copied from the VM.
 const kHiddenTreeFolders = {'node_modules', '.roxum-types-tmp'};
+// Terminal sessions as tabs with a ⋯ menu (copy output, copy all, zoom) instead of the drawer.
+const kTerminalSessionTabs = true;
