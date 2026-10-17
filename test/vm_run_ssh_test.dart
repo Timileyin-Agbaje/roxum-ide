@@ -409,6 +409,11 @@ setInterval(() => {}, 1000);
         timeout: const Duration(minutes: 2),
       );
       expect(port, 3123, reason: output.toString());
+      expect(await sync.isRunActive(), isTrue);
+      expect(
+        await _run(server, 'timeout 3 ${sync.followLogCommand} || true'),
+        contains('Listening on'),
+      );
       final url = await session.startDevServerTunnel(server, remotePort: port!);
       final before = await _httpGet(url!);
       expect(before, startsWith('pid '));
@@ -425,6 +430,7 @@ setInterval(() => {}, 1000);
       }, timeout: const Duration(seconds: 60));
 
       await _run(server, sync.stopCommand);
+      expect(await sync.isRunActive(), isFalse);
       await _until(
         () async => !session.isDevServerRunning,
         timeout: const Duration(seconds: 30),

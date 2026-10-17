@@ -309,6 +309,21 @@ class VmProjectSync {
   /// The dev server's output on the VM (see [VmRunPlan.detached]).
   String get logFile => '"\$HOME"/.roxum/run-$projectKey.log';
 
+  /// Shows a running dev server's recent output and follows it until it stops.
+  String get followLogCommand =>
+      'tail -n 100 --pid="\$(cat $_pidFile)" -f $logFile';
+
+  /// Whether this project's run (for example its dev server) is still going.
+  Future<bool> isRunActive() async {
+    final client = server.client;
+    if (client == null || client.isClosed) return false;
+    final out = await client.run(
+      'f=$_pidFile; [ -s "\$f" ] && kill -0 -- -"\$(cat "\$f")" 2>/dev/null && echo running',
+      stderr: false,
+    );
+    return utf8.decode(out).contains('running');
+  }
+
   /// Ends this project's run on the VM: the whole process group started by the run script.
   String get stopCommand =>
       'f=$_pidFile; if [ -f "\$f" ]; then pid=\$(cat "\$f"); '
