@@ -126,11 +126,18 @@ sealed class LspConfig {
   /// ccls is handled in this mode for semantic highlight compatibility.
   bool get forceFullDocumentSync => false;
 
+  Future<void>? _initialization;
+
   /// This method is used to initialize the LSP server.
   ///
-  /// This method is used internally by the [CodeForge] widget and calling it directly is not recommended.
-  /// It may crash the LSP server if called multiple times.
-  Future<void> initialize() async {
+  /// Safe to call more than once (several editors share one server, and the
+  /// app may start it early): later calls wait for the first one.
+  Future<void> initialize() =>
+      _initialization ??= _initialize().whenComplete(() {
+        if (!isInitialized) _initialization = null;
+      });
+
+  Future<void> _initialize() async {
     final workspaceUri = Uri.directory(workspacePath).toString();
     final response = await sendRequest(
       method: 'initialize',
@@ -373,16 +380,34 @@ sealed class LspConfig {
     String filePath,
     int line,
     int character,
-  ) async {
-    if (!capabilities.codeCompletion) return [];
+  ) async => (await getCompletionList(filePath, line, character)).items;
+
+  /// Like [getCompletions], but also says whether the server marked the list
+  /// incomplete (so typing more must ask again), and passes the character
+  /// that triggered the request.
+  Future<({List<LspCompletion> items, bool isIncomplete})> getCompletionList(
+    String filePath,
+    int line,
+    int character, {
+    String? triggerCharacter,
+  }) async {
+    if (!capabilities.codeCompletion) {
+      return (items: <LspCompletion>[], isIncomplete: false);
+    }
     List<LspCompletion> completion = [];
+    var isIncomplete = false;
     final response = await sendRequest(
       method: 'textDocument/completion',
-      params: _commonParams(filePath, line, character),
+      params: {
+        ..._commonParams(filePath, line, character),
+        'context': triggerCharacter == null
+            ? {'triggerKind': 1}
+            : {'triggerKind': 2, 'triggerCharacter': triggerCharacter},
+      },
     );
     try {
       final result = response['result'];
-      if (result == null) return completion;
+      if (result == null) return (items: completion, isIncomplete: false);
 
       final dynamic items;
 
@@ -390,9 +415,12 @@ sealed class LspConfig {
         items = result;
       } else {
         items = result['items'];
+        isIncomplete = result['isIncomplete'] == true;
       }
 
-      if (items == null || items is! List) return completion;
+      if (items == null || items is! List) {
+        return (items: completion, isIncomplete: isIncomplete);
+      }
 
       for (Map<String, dynamic> item in items) {
         final importUris = item['data']?['importUris'];
@@ -416,7 +444,7 @@ sealed class LspConfig {
     } on Exception catch (e) {
       debugPrint("An Error Occured: $e");
     }
-    return completion;
+    return (items: completion, isIncomplete: isIncomplete);
   }
 
   /// This method is used to get details at a specific position in the document.

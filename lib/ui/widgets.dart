@@ -1523,7 +1523,7 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
           padding: const EdgeInsets.symmetric(horizontal: 8),
           clipBehavior: .hardEdge,
           decoration: BoxDecoration(
-            color: appTheme.isDark
+            color: appTheme is CursorDarkTheme ? appTheme.editorPageToolbarBg : appTheme.isDark
               ? const Color.fromARGB(255, 25, 25, 25)
               : const Color.fromARGB(255, 236, 236, 236),
             border: Border(
@@ -1533,6 +1533,17 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
           child: Row(
             mainAxisAlignment: .end,
             children: [
+              if (context.select<ConfigBloc, bool>((bloc) => bloc.state.codeForgeConfig['showCompletionTiming'] == true))
+                ValueListenableBuilder(
+                  valueListenable: controller.completionLatency,
+                  builder: (_, latency, _) => Padding(
+                    padding: const EdgeInsets.only(right: 20),
+                    child: Text(
+                      latency == null ? 'Completion –' : 'Completion ${latency.inMilliseconds} ms',
+                      style: TextStyle(color: appTheme.selectScreenCardTextColor, fontSize: 11),
+                    ),
+                  ),
+                ),
               ValueListenableBuilder(
                 valueListenable: cursor,
                 builder: (_, lineColValue, _) {
