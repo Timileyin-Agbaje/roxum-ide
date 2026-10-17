@@ -1701,7 +1701,7 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
                                   if(ghostText != null){
                                     controller.insertText(ghostText.text, ghostText.line, ghostText.column);
                                     controller.clearGhostText();
-                                  } else {
+                                  } else if (!controller.acceptSuggestionOrNextSnippetStop()) {
                                     controller.indent();
                                   }
                                 },

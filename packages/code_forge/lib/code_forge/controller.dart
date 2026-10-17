@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' show max, min;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -126,6 +127,32 @@ class CodeForgeController implements DeltaTextInputClient {
   /// How long the last completion request took, from the keystroke to the
   /// list being ready. For an optional on-screen readout.
   final ValueNotifier<Duration?> completionLatency = ValueNotifier(null);
+
+  /// Accepted completions, shared by all editors so ranking learns from them.
+  static final CompletionRecency completionRecency = CompletionRecency();
+
+  /// Snippets offered in the completion list and ranked like server items.
+  /// Set by [CodeForge] from its `customCodeSnippets`.
+  List<CustomCodeSnippet> customSnippets = const [];
+  List<CustomCodeSnippet>? _snippetItemsSource;
+  List<LspCompletion> _snippetItems = const [];
+
+  final Expando<Future<Map<String, dynamic>>> _resolvedCompletions = Expando();
+
+  /// Remaining tab stops of the last inserted snippet, counted from the end
+  /// of the document so edits before them don't move them.
+  List<({int fromEnd, int length})> _snippetStops = [];
+  ({int startFromEnd, int endFromEnd})? _snippetRange;
+  int _signatureRequestId = 0;
+  bool _signatureHelpRequested = false;
+
+  /// True once after an accepted completion put the cursor inside a call's
+  /// parentheses, so the editor opens parameter hints.
+  bool consumeSignatureHelpRequest() {
+    final requested = _signatureHelpRequested;
+    _signatureHelpRequested = false;
+    return requested;
+  }
 
   CodeForgeController({this.lspConfig}) {
     if (lspConfig != null) {
@@ -321,6 +348,8 @@ class CodeForgeController implements DeltaTextInputClient {
         });
       });
     }
+    // Works without a language server.
+    _listeners.add(_autoCloseTagListener);
   }
 
   Future<void> _openDocumentInLsp({String? previousFile}) async {
@@ -399,6 +428,50 @@ class CodeForgeController implements DeltaTextInputClient {
     }
     _previousValue = text;
     _prevSelection = selection;
+  }
+
+  bool get _isMarkupFile {
+    final file = openedFile?.toLowerCase() ?? '';
+    return file.endsWith('.tsx') ||
+        file.endsWith('.jsx') ||
+        file.endsWith('.html') ||
+        file.endsWith('.htm');
+  }
+
+  int _autoClosePrevLength = 0, _autoClosePrevCursor = 0;
+
+  void _autoCloseTagListener() {
+    final currentLength = length;
+    final cursor = selection.extentOffset;
+    final typedOne =
+        currentLength == _autoClosePrevLength + 1 &&
+        cursor == _autoClosePrevCursor + 1;
+    _autoClosePrevLength = currentLength;
+    _autoClosePrevCursor = cursor;
+    if (!typedOne || !_isMarkupFile || _isDisposed) return;
+    final line = getLineAtOffset(cursor);
+    final column = cursor - getLineStartOffset(line);
+    if (column > 0 && getLineText(line)[column - 1] == '>') {
+      scheduleMicrotask(() => _autoCloseTag(cursor));
+    }
+  }
+
+  /// After `>` closes an opening tag, adds its closing tag after the cursor.
+  void _autoCloseTag(int cursor) {
+    if (_isDisposed || readOnly || selection.extentOffset != cursor) return;
+    if (cursor > length) return;
+    // A tag's attributes may span lines; a few lines back is plenty.
+    final line = getLineAtOffset(cursor);
+    final firstLine = max(0, line - 20);
+    final contextStart = getLineStartOffset(firstLine);
+    final file = openedFile?.toLowerCase() ?? '';
+    final closing = closingTagFor(
+      text.substring(contextStart, cursor),
+      isHtml: file.endsWith('.html') || file.endsWith('.htm'),
+    );
+    if (closing == null) return;
+    replaceRange(cursor, cursor, closing, preserveOldCursor: true);
+    selection = TextSelection.collapsed(offset: cursor);
   }
 
   bool _isAutoClosedPair(String text, int cursor) {
@@ -483,20 +556,245 @@ class CodeForgeController implements DeltaTextInputClient {
   }
 
   void _showCompletions(List<LspCompletion> items, String prefix) {
+    final language = lspConfig?.languageId ?? '';
     _suggestions = <dynamic>[
-      for (final item in items)
-        if (prefix.isEmpty || _matchesPrefix(item, prefix)) item,
+      ...rankCompletions([
+        for (final item in [...items, if (prefix.isNotEmpty) ..._snippets])
+          RankInput(
+            item: item,
+            filterText: _stringField(item, 'filterText') ?? item.label,
+            sortText: _stringField(item, 'sortText') ?? item.label,
+            preselect: item.completionItem['preselect'] == true,
+            recentIndex: completionRecency.indexOf(language, item.label),
+          ),
+      ], prefix),
     ];
-    _sortSuggestions(prefix);
     if (!_isDisposed) {
       suggestionsNotifier.value = _suggestions.isEmpty ? null : _suggestions;
     }
   }
 
-  bool _matchesPrefix(LspCompletion item, String prefix) {
-    final filterText = item.completionItem['filterText'];
-    final text = filterText is String ? filterText : item.label;
-    return text.toLowerCase().contains(prefix.toLowerCase());
+  String? _stringField(LspCompletion item, String key) {
+    final value = item.completionItem[key];
+    return value is String ? value : null;
+  }
+
+  List<LspCompletion> get _snippets {
+    if (!identical(_snippetItemsSource, customSnippets)) {
+      _snippetItemsSource = customSnippets;
+      _snippetItems = [
+        for (final snippet in customSnippets)
+          LspCompletion(
+            label: snippet.label,
+            itemType: CompletionItemType.snippet,
+            completionItem: {
+              'label': snippet.label,
+              'kind': CompletionItemType.snippet.value,
+              'detail': 'Snippet',
+              'insertTextFormat': 2,
+              'insertText': snippetWithStops(
+                snippet.value,
+                snippet.cursorLocations,
+              ),
+            },
+          ),
+      ];
+    }
+    return _snippetItems;
+  }
+
+  /// Resolves [item] once (documentation, auto-import edits, ...).
+  Future<Map<String, dynamic>> resolveCompletion(LspCompletion item) {
+    final config = lspConfig;
+    if (config == null || item.itemType == CompletionItemType.snippet) {
+      return Future.value(item.completionItem);
+    }
+    return _resolvedCompletions[item] ??= config
+        .resolveCompletionItem(item.completionItem)
+        .catchError((Object _) => item.completionItem);
+  }
+
+  /// Inserts [suggestion] the way VS Code does: an LSP item's textEdit or
+  /// insertText (expanding snippets and placing the cursor on the first tab
+  /// stop), then its additional edits such as auto-imports.
+  void acceptCompletion(dynamic suggestion) {
+    // A reply still on its way must not reopen the popup over the result.
+    _cancelCompletions();
+    if (readOnly) return;
+    if (suggestion is! LspCompletion) {
+      final insertText = _extractSuggestionText(suggestion);
+      if (insertText.isNotEmpty) {
+        insertAtCurrentCursor(insertText, replaceTypedChar: true);
+      }
+      return;
+    }
+
+    _flushBuffer();
+    final item = suggestion.completionItem;
+    final cursor = selection.extentOffset;
+    var start = cursor - getCurrentWordPrefix(text, cursor).length;
+    var end = cursor;
+    var newText = _stringField(suggestion, 'insertText') ?? suggestion.label;
+    final edit = item['textEdit'];
+    if (edit is Map) {
+      final range = edit['insert'] ?? edit['range'];
+      if (range is Map) {
+        start = _offsetForLspPosition(range['start']) ?? start;
+        // The range ends where the request was made; more may have been typed.
+        end = max(_offsetForLspPosition(range['end']) ?? end, cursor);
+      }
+      if (edit['newText'] is String) newText = edit['newText'] as String;
+    }
+
+    var insertText = newText;
+    var stops = <SnippetStop>[];
+    if (item['insertTextFormat'] == 2) {
+      final snippet = parseSnippet(newText);
+      insertText = snippet.text;
+      stops = snippet.stops;
+    }
+    final indented = _indentContinuationLines(insertText, stops, start);
+    // Accepting `fn(` + `$1)` should open parameter hints like typing `(`;
+    // set before the edit so the editor sees it on the edit's notification.
+    final caret = indented.stops.isEmpty
+        ? indented.text.length
+        : indented.stops.first.start;
+    _signatureHelpRequested = caret > 0 && indented.text[caret - 1] == '(';
+    replaceRange(start, end, indented.text);
+    _startSnippet(indented.stops, start, start + indented.text.length);
+
+    completionRecency.record(lspConfig?.languageId ?? '', suggestion.label);
+    unawaited(_applyAdditionalEdits(suggestion, start));
+  }
+
+  /// Gives a multi-line insertion the indentation of the line it goes into.
+  ({String text, List<SnippetStop> stops}) _indentContinuationLines(
+    String insertText,
+    List<SnippetStop> stops,
+    int at,
+  ) {
+    if (!insertText.contains('\n')) return (text: insertText, stops: stops);
+    final lineText = getLineText(getLineAtOffset(at));
+    final indent = RegExp(r'^[ \t]*').firstMatch(lineText)?.group(0) ?? '';
+    if (indent.isEmpty) return (text: insertText, stops: stops);
+    int shifted(int offset) =>
+        offset +
+        '\n'.allMatches(insertText.substring(0, offset)).length * indent.length;
+    return (
+      text: insertText.replaceAll('\n', '\n$indent'),
+      stops: [
+        for (final s in stops)
+          (index: s.index, start: shifted(s.start), end: shifted(s.end)),
+      ],
+    );
+  }
+
+  void _startSnippet(List<SnippetStop> stops, int insertStart, int insertEnd) {
+    // Stops nested in an earlier placeholder would be wrong once that
+    // placeholder is typed over, so only the outer one is kept.
+    final kept = <SnippetStop>[];
+    for (final stop in stops) {
+      final nested = kept.any(
+        (outer) =>
+            outer.end > outer.start &&
+            stop.start >= outer.start &&
+            stop.end <= outer.end,
+      );
+      if (!nested) kept.add(stop);
+    }
+    stops = kept;
+    _snippetRange = (
+      startFromEnd: length - insertStart,
+      endFromEnd: length - insertEnd,
+    );
+    _snippetStops = [
+      for (final s in stops)
+        (fromEnd: length - (insertStart + s.start), length: s.end - s.start),
+    ];
+    _goToNextSnippetStop();
+  }
+
+  bool _goToNextSnippetStop() {
+    final range = _snippetRange;
+    final cursor = selection.extentOffset;
+    // Tab only walks the snippet while the cursor is still inside it.
+    if (_snippetStops.isEmpty ||
+        range == null ||
+        cursor < length - range.startFromEnd ||
+        cursor > length - range.endFromEnd) {
+      _snippetStops = [];
+      _snippetRange = null;
+      return false;
+    }
+    final stop = _snippetStops.removeAt(0);
+    final start = (length - stop.fromEnd).clamp(0, length);
+    final end = (start + stop.length).clamp(start, length);
+    selection = TextSelection(baseOffset: start, extentOffset: end);
+    return true;
+  }
+
+  /// The toolbar Tab: accepts the highlighted (or first) suggestion, else
+  /// moves to the next snippet tab stop. Returns false if it did neither.
+  bool acceptSuggestionOrNextSnippetStop() {
+    final suggestions = suggestionsNotifier.value;
+    if (suggestions != null && suggestions.isNotEmpty) {
+      final index = (currentlySelectedSuggestion ?? 0).clamp(
+        0,
+        suggestions.length - 1,
+      );
+      acceptCompletion(suggestions[index]);
+      currentlySelectedSuggestion = null;
+      return true;
+    }
+    return _goToNextSnippetStop();
+  }
+
+  Future<void> _applyAdditionalEdits(
+    LspCompletion suggestion,
+    int insertStart,
+  ) async {
+    // The edits' positions are only valid while the text before the
+    // insertion stays the same (typing after it is fine).
+    final textBefore = text.substring(0, insertStart);
+    var edits = suggestion.completionItem['additionalTextEdits'];
+    if (edits is! List && suggestion.completionItem['data'] != null) {
+      edits = (await resolveCompletion(suggestion))['additionalTextEdits'];
+    }
+    if (edits is! List || edits.isEmpty || _isDisposed) return;
+    if (!text.startsWith(textBefore)) return;
+
+    // The edits were computed before the insertion, so only edits before it
+    // (imports at the top) still have valid positions.
+    final converted = <({int start, int end, String text})>[];
+    for (final edit in edits) {
+      if (edit is! Map || edit['range'] is! Map) continue;
+      final start = _offsetForLspPosition(edit['range']['start']);
+      final end = _offsetForLspPosition(edit['range']['end']);
+      if (start == null || end == null || end > insertStart) continue;
+      converted.add((start: start, end: end, text: '${edit['newText'] ?? ''}'));
+    }
+    if (converted.isEmpty) return;
+    converted.sort((a, b) => b.start.compareTo(a.start));
+
+    final selectionFromEnd = (
+      base: length - selection.baseOffset,
+      extent: length - selection.extentOffset,
+    );
+    for (final edit in converted) {
+      replaceRange(edit.start, edit.end, edit.text, preserveOldCursor: true);
+    }
+    selection = TextSelection(
+      baseOffset: length - selectionFromEnd.base,
+      extentOffset: length - selectionFromEnd.extent,
+    );
+  }
+
+  int? _offsetForLspPosition(dynamic position) {
+    if (position is! Map) return null;
+    final line = position['line'], character = position['character'];
+    if (line is! int || character is! int || line >= lineCount) return null;
+    final lineLength = getLineText(line).length;
+    return getLineStartOffset(line) + min(character, lineLength);
   }
 
   void _scheduleDocumentColorRefresh() {
@@ -580,10 +878,7 @@ class CodeForgeController implements DeltaTextInputClient {
     final filePath = openedFile!;
     await Future<void>.delayed(Duration.zero);
     // The server must see the latest text before it completes at this spot.
-    if (_lspDocumentSyncTimer?.isActive ?? false) {
-      _lspDocumentSyncTimer!.cancel();
-      await _flushLspDocumentSync();
-    }
+    await _flushPendingLspSync();
     final result = await lspConfig!.getCompletionList(
       filePath,
       line,
@@ -1280,14 +1575,7 @@ class CodeForgeController implements DeltaTextInputClient {
     final safeSelectedIndex = isMobile
         ? (currentlySelectedSuggestion ?? 0).clamp(0, suggestions.length - 1)
         : selectedIndex.clamp(0, suggestions.length - 1);
-    final selected = suggestions[safeSelectedIndex];
-    final insertText = _extractSuggestionText(selected);
-
-    if (insertText.isNotEmpty) {
-      insertAtCurrentCursor(insertText, replaceTypedChar: true);
-    }
-
-    suggestionsNotifier.value = null;
+    acceptCompletion(suggestions[safeSelectedIndex]);
     currentlySelectedSuggestion = 0;
   }
 
@@ -2695,9 +2983,7 @@ class CodeForgeController implements DeltaTextInputClient {
             _isMobile &&
             currentlySelectedSuggestion != null) {
           final sugg = suggestionsNotifier.value![currentlySelectedSuggestion!];
-          final text = _extractSuggestionText(sugg);
-          insertAtCurrentCursor(text, replaceTypedChar: true);
-          suggestionsNotifier.value = null;
+          acceptCompletion(sugg);
           currentlySelectedSuggestion = null;
           callSignatureHelp();
           continue;
@@ -2707,7 +2993,7 @@ class CodeForgeController implements DeltaTextInputClient {
           _lastTypedCharacter = delta.textInserted;
         }
         if (delta.textInserted.isNotEmpty &&
-            (_isAlpha(delta.textInserted) ||
+            (_isIdentChar(delta.textInserted.codeUnitAt(0)) ||
                 _isCompletionTriggerChar(delta.textInserted))) {
           typingDetected = true;
         }
@@ -4872,17 +5158,30 @@ class CodeForgeController implements DeltaTextInputClient {
   /// for the current cursor position, displaying available parameters and
   /// highlighting the parameter in focus within function parentheses.
   Future<void> callSignatureHelp() async {
-    if (lspConfig != null) {
+    if (lspConfig != null && openedFile != null) {
+      final requestId = ++_signatureRequestId;
+      // Without this the server answers for the text before the '(' or ','.
+      await _flushPendingLspSync();
+      if (requestId != _signatureRequestId || _isDisposed) return;
       final cursorPosition = selection.extentOffset;
       final line = getLineAtOffset(cursorPosition);
       final lineStartOffset = getLineStartOffset(line);
       final character = cursorPosition - lineStartOffset;
-      signatureNotifier.value = await lspConfig!.getSignatureHelp(
+      final help = await lspConfig!.getSignatureHelp(
         openedFile!,
         line,
         character,
         1,
       );
+      if (requestId != _signatureRequestId || _isDisposed) return;
+      signatureNotifier.value = help;
+    }
+  }
+
+  Future<void> _flushPendingLspSync() async {
+    if (_lspDocumentSyncTimer?.isActive ?? false) {
+      _lspDocumentSyncTimer!.cancel();
+      await _flushLspDocumentSync();
     }
   }
 

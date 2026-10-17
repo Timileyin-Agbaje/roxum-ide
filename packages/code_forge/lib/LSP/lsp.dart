@@ -179,6 +179,12 @@ sealed class LspConfig {
     }
 
     await sendNotification(method: 'initialized', params: {});
+    if (workspaceConfiguration.isNotEmpty) {
+      await sendNotification(
+        method: 'workspace/didChangeConfiguration',
+        params: {'settings': workspaceConfiguration},
+      );
+    }
     isInitialized = true;
   }
 
@@ -191,7 +197,9 @@ sealed class LspConfig {
           'resolveSupport': {
             'properties': ['documentation', 'detail', 'additionalTextEdits'],
           },
-          'snippetSupport': false,
+          'snippetSupport': true,
+          'insertReplaceSupport': true,
+          'labelDetailsSupport': true,
         },
       };
     }
