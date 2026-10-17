@@ -8,6 +8,7 @@ environment:
 
 dependencies:
   android_intent_plus: ^6.0.0
+  archive: ^4.3.0
   bloc: ^9.2.1
   code_forge:
     path: packages/code_forge

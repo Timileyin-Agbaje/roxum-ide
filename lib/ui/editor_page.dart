@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -383,6 +384,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
       }
       return true;
     }
+    _vmSession.watchTypes(server, onUpdated: _reloadTypeScriptServers);
 
     if (plan.isViteDevServer) {
       final url = await _vmSession.startDevServerTunnel(server, syncOnSave: _vmSyncOnSave);
@@ -406,6 +408,19 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
       );
     }
     return true;
+  }
+
+  /// Makes this project's TypeScript servers re-read node_modules after the
+  /// VM's package types were copied in.
+  void _reloadTypeScriptServers() {
+    final prefix = ActiveEditorBloc.buildLspCacheKey(workspacePath: widget.rootDir, languageId: '');
+    for (final MapEntry(:key, value: config) in _activeEditorBloc.sharedLspConfigs.entries) {
+      if (config == null || !config.isInitialized || !key.startsWith(prefix)) continue;
+      if (!const {'typescript', 'tsx', 'javascript', 'jsx'}.contains(key.substring(prefix.length))) continue;
+      unawaited(config
+          .executeCommand('typescript.tsserverRequest', ['reloadProjects'])
+          .catchError((Object e) => debugPrint('Could not reload TypeScript projects: $e')));
+    }
   }
 
   Future<void> _cleanVmCopy(SSHInfo server) async {
