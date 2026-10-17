@@ -386,8 +386,17 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
     }
     _vmSession.watchTypes(server, onUpdated: _reloadTypeScriptServers);
 
-    if (plan.isViteDevServer) {
-      final url = await _vmSession.startDevServerTunnel(server, syncOnSave: _vmSyncOnSave);
+    if (plan.isDevServer) {
+      // Vite uses a fixed port; other dev servers are previewed on the port they print.
+      final port = plan.isViteDevServer
+          ? VmRunPlan.vitePort
+          : await _vmSession.waitForDevServerPort(server);
+      if (!mounted || runId != _vmRunCount || port == null) return true;
+      final url = await _vmSession.startDevServerTunnel(
+        server,
+        syncOnSave: _vmSyncOnSave,
+        remotePort: port,
+      );
       if (!mounted || runId != _vmRunCount) return true;
       if (url == null) {
         ScaffoldMessenger.of(context).showSnackBar(

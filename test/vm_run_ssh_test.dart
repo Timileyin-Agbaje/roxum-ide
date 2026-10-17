@@ -184,13 +184,28 @@ void main() {
     skip: skip,
   );
 
-  test('never deletes remote files', () async {
+  test('mirrors deletes and renames, never touching files it did not upload', () async {
     await write('a.js', 'a');
-    await write('b.js', 'b');
+    await write('old/name.js', 'n');
     await sync.sync();
-    await File(path.join(project.path, 'b.js')).delete();
-    await sync.sync();
-    expect(await _run(server, 'cat ${remote('b.js')}'), 'b');
+    await _run(
+      server,
+      'cd ${sync.remoteShellDir} && mkdir -p dist && echo built > dist/app.js && echo vm > made-on-vm.txt',
+    );
+
+    await File(path.join(project.path, 'a.js')).delete();
+    await File(path.join(project.path, 'old', 'name.js'))
+        .rename(path.join(project.path, 'new.js'));
+    final result = await sync.sync();
+    expect(result.deleted, 2);
+    expect(
+      await _run(
+        server,
+        'cd ${sync.remoteShellDir} && ls -A | sort | tr "\\n" " "',
+      ),
+      'dist made-on-vm.txt new.js',
+    );
+    expect(await _run(server, 'cat ${remote('dist/app.js')}'), 'built');
   }, skip: skip);
 
   test('copies package types from the VM once npm install has run', () async {
@@ -358,6 +373,64 @@ setInterval(() => {}, 1000);
       expect(await _run(server, 'pgrep -g $group | wc -l'), '0');
       session.close();
     },
+    skip: skip,
+  );
+
+  test(
+    'other dev servers: preview on the printed port, survive a dropped connection',
+    () async {
+      await write(
+        'package.json',
+        jsonEncode({
+          'name': 'roxum-express',
+          'scripts': {'dev': 'node server.js'},
+          'dependencies': {},
+        }),
+      );
+      await write(
+        'server.js',
+        "require('http').createServer((q, r) => r.end('pid ' + process.pid))"
+            ".listen(3123, () => console.log('Listening on http://localhost:3123'));",
+      );
+      final session = VmSession(project.path);
+      addTearDown(session.dispose);
+      await session.sync(server);
+      final plan = (await VmRunPlan.forFile(
+        project.path,
+        path.join(project.path, 'server.js'),
+      ))!;
+      expect((plan.isDevServer, plan.isViteDevServer), (true, false));
+      final command = await sync.prepareRunCommand(plan.body);
+      final output = StringBuffer();
+      await _runInShell(server, command, output);
+
+      final port = await session.waitForDevServerPort(
+        server,
+        timeout: const Duration(minutes: 2),
+      );
+      expect(port, 3123, reason: output.toString());
+      final url = await session.startDevServerTunnel(server, remotePort: port!);
+      final before = await _httpGet(url!);
+      expect(before, startsWith('pid '));
+      await _until(() async => output.toString().contains('Listening on'));
+
+      // Drop the SSH connection: the session reconnects and the same server answers.
+      server.client!.close();
+      await _until(() async {
+        try {
+          return !server.client!.isClosed && await _httpGet(url) == before;
+        } catch (_) {
+          return false; // Still reconnecting.
+        }
+      }, timeout: const Duration(seconds: 60));
+
+      await _run(server, sync.stopCommand);
+      await _until(
+        () async => !session.isDevServerRunning,
+        timeout: const Duration(seconds: 30),
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 4)),
     skip: skip,
   );
 
