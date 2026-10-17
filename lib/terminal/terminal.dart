@@ -16,6 +16,7 @@ import 'command_output.dart';
 import '../utils/constants.dart';
 import '../utils/functions.dart';
 import '../utils/themes.dart';
+import '../utils/vm_run.dart';
 
 class SetupTerminal extends StatefulWidget {
   final String projectDir;
@@ -236,6 +237,9 @@ class TerminalRuntime {
 
   Pty? pty;
   SSHSession? sshSession;
+
+  /// The SSH server (VM or Termux) this session runs on; null for the phone.
+  SSHInfo? server;
   SSHClient? sshClient;
   String? sshStopCommand;
   String currentInput = '';
@@ -557,6 +561,19 @@ class _SetupTerminalState extends State<SetupTerminal> {
     if (_sessionBloc.state.activeSessionId == sessionId) {
       _suggestionsNotifier.value = null;
     }
+    // An SSH session restarts on the same server, reconnecting if needed.
+    final server = runtime.server;
+    if (server != null) {
+      runtime.sshSession?.close();
+      runtime.sshSession = null;
+      final (connected, message) = await ensureVmConnected(server);
+      if (!connected) {
+        runtime.terminal.write('\r\nCould not reconnect to ${server.name}: $message\r\n');
+        return;
+      }
+      await _startPty(runtime, externalServer: server);
+      return;
+    }
     await _startPty(runtime);
   }
 
@@ -678,6 +695,7 @@ class _SetupTerminalState extends State<SetupTerminal> {
   }) async {
     final sessionRuntimes = TerminalRuntimeRegistry.instance.runtimes;
     if(externalServer != null && externalServer.client != null){
+      runtime.server = externalServer;
       final terminal = runtime.terminal;
       final session = await externalServer.client!.shell(
         pty: SSHPtyConfig(

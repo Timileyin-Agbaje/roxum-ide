@@ -72,13 +72,15 @@ Future<(bool, String)> ensureVmConnected(SSHInfo server) async {
 class VmSyncResult {
   final int uploaded;
   final int unchanged;
+  final int deleted;
 
-  const VmSyncResult({required this.uploaded, required this.unchanged});
+  const VmSyncResult({required this.uploaded, required this.unchanged, this.deleted = 0});
 }
 
 /// Mirrors a local project to `~/roxum/<project folder>` on a server, uploading only
-/// files whose size or modified time changed since the last sync. Remote files are
-/// never deleted, except by [clean].
+/// files whose size or modified time changed since the last sync. Files it uploaded
+/// that are gone on the phone (deleted or renamed) are deleted on the server; other
+/// remote files (node_modules, dist, files made on the VM) are never touched.
 class VmProjectSync {
   static const excludedDirs = {
     'node_modules', '.git', 'dist', 'build', '.vite', '.next', 'coverage',
@@ -210,6 +212,18 @@ class VmProjectSync {
         manifest = {};
       }
 
+      // Only files this app uploaded (listed in the manifest) are ever deleted.
+      final removed = manifest.keys.where((key) => !local.containsKey(key)).toList();
+      for (final relative in removed) {
+        final remotePath = path.posix.join(remoteRoot, path.split(relative).join('/'));
+        try {
+          await sftp.remove(remotePath);
+        } on SftpStatusError catch (_) {
+          // Already gone.
+        }
+        await _removeEmptyParents(sftp, path.posix.dirname(remotePath), remoteRoot);
+      }
+
       final forced = force.map((file) => path.relative(file, from: rootDir)).toSet();
       final changed = local.entries.where((entry) {
         final previous = manifest[entry.key];
@@ -259,9 +273,22 @@ class VmProjectSync {
       return VmSyncResult(
         uploaded: changed.length,
         unchanged: local.length - changed.length,
+        deleted: removed.length,
       );
     } finally {
       await sftp.close();
+    }
+  }
+
+  /// Removes folders left empty by a deletion, up to (not including) [root].
+  Future<void> _removeEmptyParents(SftpClient sftp, String dir, String root) async {
+    while (dir != root && path.posix.isWithin(root, dir)) {
+      try {
+        await sftp.rmdir(dir);
+      } on SftpStatusError catch (_) {
+        return; // Not empty.
+      }
+      dir = path.posix.dirname(dir);
     }
   }
 
@@ -278,6 +305,9 @@ class VmProjectSync {
   }
 
   String get _pidFile => '"\$HOME"/.roxum/run-$projectKey.pid';
+
+  /// The dev server's output on the VM (see [VmRunPlan.detached]).
+  String get logFile => '"\$HOME"/.roxum/run-$projectKey.log';
 
   /// Ends this project's run on the VM: the whole process group started by the run script.
   String get stopCommand =>
@@ -296,8 +326,10 @@ class VmProjectSync {
     final script = '''#!/usr/bin/env bash
 # Written by Roxum IDE for ${projectName.replaceAll('\n', ' ')}
 mkdir -p "\$HOME/.roxum"
-echo \$\$ > "\$HOME/.roxum/run-$projectKey.pid"
-trap 'rm -f "\$HOME/.roxum/run-$projectKey.pid"' EXIT
+pidfile="\$HOME/.roxum/run-$projectKey.pid"
+log="\$HOME/.roxum/run-$projectKey.log"
+echo \$\$ > "\$pidfile"
+trap 'rm -f "\$pidfile"' EXIT
 if ! command -v node >/dev/null 2>&1; then
   echo "Node.js is not installed on this VM. Run the 'Prepare the VM' steps in the README."
   exit 127
@@ -444,10 +476,27 @@ class VmRunPlan {
   /// The script body run from the project folder.
   final String body;
 
-  /// True for a Vite dev server, which gets a preview tunnel.
+  /// True for a Vite dev server, which gets a preview tunnel on [vitePort].
   final bool isViteDevServer;
 
-  const VmRunPlan({required this.body, this.isViteDevServer = false});
+  /// True for any `dev` script; other dev servers are previewed on the port
+  /// they print.
+  final bool isDevServer;
+
+  const VmRunPlan({required this.body, this.isViteDevServer = false, this.isDevServer = false});
+
+  /// Runs [command] in its own session with output to the run's log, and
+  /// follows the log in this terminal. A dropped SSH connection then doesn't
+  /// stop the dev server; Ctrl+C and Stop still do (the pid file holds the
+  /// server's process group). Uses the run script's \$pidfile and \$log.
+  static String detached(String command) => '''
+trap - EXIT
+rm -f "\$pidfile"
+: > "\$log"
+setsid bash -c 'echo \$\$ > "\$1"; trap "" HUP; $command; rm -f "\$1"' _ "\$pidfile" > "\$log" 2>&1 < /dev/null &
+for _ in \$(seq 50); do [ -s "\$pidfile" ] && break; sleep 0.1; done
+trap 'kill -INT -- -"\$(cat "\$pidfile" 2>/dev/null)" 2>/dev/null' INT
+tail -n +1 --pid="\$(cat "\$pidfile")" -f "\$log"''';
 
   static const vitePort = 5173;
 
@@ -475,9 +524,10 @@ class VmRunPlan {
             await File(path.join(rootDir, 'vite.config.js')).exists();
         return VmRunPlan(
           body: isVite
-              ? '$install\nnpm run dev -- --host 127.0.0.1 --port $vitePort --strictPort'
-              : '$install\nnpm run dev',
+              ? '$install\n${detached('npm run dev -- --host 127.0.0.1 --port $vitePort --strictPort')}'
+              : '$install\n${detached('npm run dev')}',
           isViteDevServer: isVite,
+          isDevServer: true,
         );
       }
     }
@@ -497,9 +547,18 @@ class VmRunPlan {
   }
 }
 
+/// The port of the first local URL a dev server printed
+/// (`http://localhost:3000`, `http://127.0.0.1:8080/`...), ignoring colors.
+int? devServerPortIn(String output) {
+  final plain = output.replaceAll(RegExp(r'\x1B\[[0-9;]*[A-Za-z]'), '');
+  final match = RegExp(r'https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})').firstMatch(plain);
+  return match == null ? null : int.tryParse(match.group(1)!);
+}
+
 /// Forwards a free local port on the phone to the VM's Vite port over SSH.
 class VmPreviewTunnel {
-  final SSHClient client;
+  /// Replaced after a reconnect; the local port (and preview URL) stays.
+  SSHClient client;
   final int remotePort;
   ServerSocket? _server;
   final Set<Socket> _sockets = {};
@@ -634,12 +693,13 @@ class VmSession {
             ));
           },
         );
-        if (!quiet || result.uploaded > 0) {
+        if (!quiet || result.uploaded > 0 || result.deleted > 0) {
           _setStatus(
             VmStatus(
-              result.uploaded == 0
+              result.uploaded == 0 && result.deleted == 0
                   ? 'VM copy is up to date'
-                  : 'Synced ${result.uploaded} file${result.uploaded == 1 ? '' : 's'} to ${server.name}',
+                  : 'Synced ${result.uploaded} file${result.uploaded == 1 ? '' : 's'}'
+                      '${result.deleted > 0 ? ', deleted ${result.deleted}' : ''} to ${server.name}',
             ),
             clearAfter: const Duration(seconds: 3),
           );
@@ -659,13 +719,14 @@ class VmSession {
   Future<String?> startDevServerTunnel(
     SSHInfo server, {
     bool syncOnSave = true,
+    int remotePort = VmRunPlan.vitePort,
     Duration timeout = const Duration(minutes: 5),
   }) async {
     final client = server.client;
     if (client == null) return null;
     await stopDevServerTunnel();
     _server = server;
-    final tunnel = VmPreviewTunnel(client);
+    final tunnel = VmPreviewTunnel(client, remotePort: remotePort);
     _tunnel = tunnel;
 
     final started = DateTime.now();
@@ -695,14 +756,84 @@ class VmSession {
       });
     }
 
-    // Close the tunnel once the dev server stops or SSH drops.
+    // Close the tunnel once the dev server stops; if SSH drops (network
+    // change), reconnect and keep the same preview URL.
+    var busy = false;
     _watchTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-      if (!identical(_tunnel, tunnel)) return;
-      if (client.isClosed || !await tunnel.isRemoteListening()) {
-        await stopDevServerTunnel();
+      if (!identical(_tunnel, tunnel) || busy) return;
+      busy = true;
+      try {
+        if (!tunnel.client.isClosed && await tunnel.isRemoteListening()) return;
+        if (!tunnel.client.isClosed && await _isAlive(tunnel.client)) {
+          await stopDevServerTunnel();
+          return;
+        }
+        tunnel.client.close();
+        if (!await _reconnect(server, tunnel)) await stopDevServerTunnel();
+      } finally {
+        busy = false;
       }
     });
     return previewUrl;
+  }
+
+  static Future<bool> _isAlive(SSHClient client) async {
+    try {
+      await client.run('true').timeout(const Duration(seconds: 5));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Reconnects to [server] with backoff for up to about five minutes, then
+  /// points [tunnel] at the new connection. The dev server on the VM keeps
+  /// running meanwhile (it is detached from the SSH session).
+  Future<bool> _reconnect(SSHInfo server, VmPreviewTunnel tunnel) async {
+    for (final seconds in const [1, 2, 4, 8, 15, 30, 30, 30, 30, 30, 30, 30, 30, 30]) {
+      if (_disposed || !identical(_tunnel, tunnel)) return false;
+      _setStatus(VmStatus('Reconnecting to ${server.name}…'));
+      final (connected, _) = await ensureVmConnected(server);
+      final client = server.client;
+      if (connected && client != null) {
+        tunnel.client = client;
+        if (!await tunnel.isRemoteListening()) {
+          _setStatus(VmStatus('Reconnected; the dev server on ${server.name} has stopped'),
+              clearAfter: const Duration(seconds: 5));
+          return false;
+        }
+        _setStatus(VmStatus('Reconnected to ${server.name}'), clearAfter: const Duration(seconds: 3));
+        return true;
+      }
+      await Future.delayed(Duration(seconds: seconds));
+    }
+    _setStatus(VmStatus('Lost the connection to ${server.name}', isError: true),
+        clearAfter: const Duration(seconds: 8));
+    return false;
+  }
+
+  /// Waits for a dev server (other than Vite) to print its local URL in the
+  /// run's log on the VM and returns the port, or null after [timeout].
+  Future<int?> waitForDevServerPort(
+    SSHInfo server, {
+    Duration timeout = const Duration(minutes: 5),
+  }) async {
+    final log = syncFor(server).logFile;
+    final started = DateTime.now();
+    while (!_disposed && DateTime.now().difference(started) < timeout) {
+      final client = server.client;
+      if (client == null || client.isClosed) return null;
+      try {
+        final output = utf8.decode(
+          await client.run('head -c 65536 $log 2>/dev/null', stderr: false),
+          allowMalformed: true,
+        );
+        final port = devServerPortIn(output);
+        if (port != null) return port;
+      } catch (_) {}
+      await Future.delayed(const Duration(seconds: 1));
+    }
+    return null;
   }
 
   /// Copies the VM's package types to the phone once `npm install` has run

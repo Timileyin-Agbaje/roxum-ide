@@ -41,13 +41,14 @@ node -v && tsx --version
 
 - Open a project and pick the VM in the menu next to the Play button (the choice is remembered per project). Pick **Phone** to run on the device again.
 - **Play** syncs the project to `~/roxum/<project folder>` on the VM (only changed files; `node_modules`, `.git`, `dist`, `build`, `.vite`, `.next`, `coverage` and `*.log` are skipped), then:
-  - a project with a `dev` script runs `npm install` when needed and `npm run dev` (Vite on `127.0.0.1:5173`), and the preview opens in the app through an SSH tunnel;
+  - a project with a `dev` script runs `npm install` when needed and `npm run dev` (Vite on `127.0.0.1:5173`; other dev servers on the port they print, such as `http://localhost:3000`), and the preview opens in the app through an SSH tunnel. The dev server runs detached with its output in `~/.roxum/run-<project>.log`, which the terminal follows, so if the connection drops (for example switching Wi-Fi) the app reconnects and the preview continues without restarting it;
   - a `.ts`/`.tsx` file runs with `npx tsx`, a `.js`/`.mjs`/`.cjs` file with `node`;
   - HTML and CSS files still preview on the phone.
 - **Stop** in the terminal sends Ctrl+C, then ends anything left of the run on the VM.
-- While a Vite dev server runs, saved files sync automatically so hot reload sees them. Turn this off with **Sync on save** in the same menu.
+- While a dev server runs, saved files sync automatically so hot reload sees them. Turn this off with **Sync on save** in the same menu.
 - After `npm install` runs on the VM, the app copies the packages' type definitions (every `package.json` and `.d.ts` file) into the phone project's `node_modules`, so hovers and auto-imports on the phone know React and the other packages. A `node_modules` installed on the phone itself is left alone. The file tree hides `node_modules`.
-- **Clean VM copy** in that menu deletes the project's folder on the VM. Nothing on the VM is deleted otherwise.
+- Files you delete or rename on the phone are deleted on the VM at the next sync, but only files the app uploaded; `node_modules`, `dist` and files created on the VM are never touched.
+- **Clean VM copy** in that menu deletes the project's folder on the VM.
 - If the VM is stopped, Play offers **Run on phone instead**.
 
 ### Build
