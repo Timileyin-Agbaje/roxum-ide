@@ -1978,6 +1978,13 @@ String? typeScriptProjectExtension(String rootDir) {
   return null;
 }
 
+/// [fullPath] relative to the app's storage folder (`Projects/MovieFinder`),
+/// or unchanged if it is elsewhere.
+String shortStoragePath(String fullPath) {
+  final storageRoot = path.dirname(projectDir);
+  return path.isWithin(storageRoot, fullPath) ? path.relative(fullPath, from: storageRoot) : fullPath;
+}
+
 String lspServerExtForFilePath(String filePath) {
   return lspServerExtForExtension(ext: path.extension(filePath));
 }

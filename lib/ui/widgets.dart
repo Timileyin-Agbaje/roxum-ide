@@ -1659,7 +1659,14 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
             ) : SizedBox.shrink(),
           ),
         ),
-        RawScrollbar(
+        if (kCompactEditorToolbar)
+          _buildCompactToolbar(
+            codeActionEnabled: codeActionEnabled,
+            inlayHintEnabled: inlayHintEnabled,
+            goToDefinitionEnabled: goToDefinitionEnabled,
+            signatureHelpEnabled: signatureHelpEnabled,
+          )
+        else RawScrollbar(
           controller: sctrl,
           scrollbarOrientation: ScrollbarOrientation.top,
           thumbColor: appTheme.selectScreenCardTextColor.withAlpha(50),
@@ -1910,119 +1917,7 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
                             child: bottomTool(
                               appTheme.isDark,
                               Icons.devices_fold_outlined,
-                              () async{
-                                if(controller.lspConfig == null || controller.openedFile == null) return;
-                                final cursorOffset = controller.selection.extentOffset.clamp(0, controller.length);
-                                final line = controller.getLineAtOffset(cursorOffset);
-                                final lineText = controller.getLineText(line);
-                                final lineStartOffset = controller.findLineStart(cursorOffset);
-                                final character = (cursorOffset - lineStartOffset).clamp(0, lineText.length);
-
-                                Map<String, dynamic> def = {};
-                                try {
-                                  def = await controller.lspConfig!.getDefinition(
-                                    controller.openedFile!,
-                                    line,
-                                    character,
-                                  );
-                                } catch (_) {
-                                  def = {};
-                                }
-                            
-                                final String? defFile = def["uri"];
-                                if (defFile != null){
-                                  if(!context.mounted) return;
-                                  final defPath = File(Uri.parse(defFile).toFilePath()).absolute.path;
-                                  if(defPath == controller.openedFile){
-                                    final int? line = def["range"]?["start"]?["line"];
-                                    if(line != null){
-                                      controller.scrollToLine(line);
-                                    }
-                                  } else {
-                                    final int? line = def["range"]?["start"]?["line"];
-                                    final activeEditorBloc = context.read<ActiveEditorBloc>();
-                                    final currentState = List<ActiveEditor>.from(
-                                      activeEditorBloc.state.activeEditors,
-                                    );
-                            
-                                    final existingIndex = currentState.indexWhere(
-                                      (item) => File(item.file.path).absolute.path == defPath,
-                                    );
-                            
-                                    if (existingIndex >= 0) {
-                                      for (var i = 0; i < currentState.length; i++) {
-                                        currentState[i].isActive = i == existingIndex;
-                                      }
-                                      activeEditorBloc.add(ActiveEditorEvent(currentState));
-                            
-                                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                                        final tabController = widget.tabController;
-                                        if (tabController != null && existingIndex < tabController.length) {
-                                          tabController.animateTo(existingIndex);
-                                        }
-                                        if (line != null) {
-                                          currentState[existingIndex].controller.scrollToLine(line);
-                                        }
-                                      });
-                                    } else {
-                                      final targetFile = File(defPath);
-                                      if (!targetFile.existsSync()) return;
-                            
-                                      for (final item in currentState) {
-                                        item.isActive = false;
-                                      }
-                            
-                                      final lang = languages.firstWhere(
-                                        (language) => language.extension.contains(
-                                          path.extension(targetFile.path).replaceFirst(".", ""),
-                                        ),
-                                        orElse: () => languages[0],
-                                      );
-                            
-                                      final config = context.read<ConfigBloc>().state.codeForgeConfig;
-                                      LspConfig? lspConfig;
-                                      if (config['enableLSP']) {
-                                        lspConfig = await activeEditorBloc.getOrStartSharedLspConfig(
-                                          languageId: _lspLanguageIdForPath(lang, targetFile.path),
-                                          ext: lspServerExtForFilePath(targetFile.path),
-                                          executable: lang.lspExecutable,
-                                          args: lang.args ?? [],
-                                        );
-                                      }
-                            
-                                      final newController = CodeForgeController(lspConfig: lspConfig);
-                                      await _applyPendingAgenticDiffForFile(newController, targetFile.path);
-                                      final newEditor = ActiveEditor(
-                                        file: targetFile,
-                                        controller: newController,
-                                        languageDetails: lang,
-                                        undoRedoController: UndoRedoController(),
-                                        hscroll: ScrollController(),
-                                        vscroll: ScrollController(),
-                                        isActive: true,
-                                        findController: FindController(newController),
-                                      );
-                            
-                                      currentState.add(newEditor);
-                                      activeEditorBloc.add(ActiveEditorEvent(currentState));
-                            
-                                      final newIndex = currentState.length - 1;
-                                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                                        final tabController = widget.tabController;
-                                        if (tabController != null && newIndex < tabController.length) {
-                                          tabController.animateTo(newIndex);
-                                        }
-                                        if (line != null) {
-                                          Future.delayed(const Duration(milliseconds: 100), () {
-                                            if (!mounted) return;
-                                            newEditor.controller.scrollToLine(line);
-                                          });
-                                        }
-                                      });
-                                    }
-                                  }
-                                }
-                              },
+                              _goToDefinition,
                               null,
                               goToDefinitionEnabled,
                             ),
@@ -2090,36 +1985,7 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
                             child: bottomTool(
                               appTheme.isDark,
                               Icons.format_paint,
-                              (){
-                                final line = controller.getLineAtOffset(controller.selection.extentOffset);
-                            
-                                if(controller.lineDecorations.any((l) => l.id == line.toString())){
-                                  final decoratedId = controller.lineDecorations.singleWhere((l) => l.id == line.toString()).id;
-                                  controller.removeLineDecoration(decoratedId);
-                                  controller.removeGutterDecoration(decoratedId);
-                                  return;
-                                }
-                            
-                                controller.addLineDecoration(
-                                  LineDecoration(
-                                    id: line.toString(),
-                                    startLine: line,
-                                    endLine: controller.getLineAtOffset(controller.selection.extentOffset),
-                                    type: LineDecorationType.background,
-                                    color: Colors.blue.withAlpha(95)
-                                  )
-                                );
-                            
-                                controller.addGutterDecoration(
-                                  GutterDecoration(
-                                    id: line.toString(),
-                                    startLine: line,
-                                    endLine: controller.getLineAtOffset(controller.selection.extentOffset),
-                                    type: GutterDecorationType.dot,
-                                    color: Colors.blue
-                                  )
-                                );
-                              }
+                              _toggleLineHighlight
                             ),
                           ),
                           Tooltip(
@@ -2161,6 +2027,306 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
       right: false,
       child: pageContent,
     );
+  }
+
+  static const _toolbarSymbols = [
+    '{', '}', '(', ')', '[', ']', ';', ':', '"', "'", '`', '<', '>', '/', '=', '=>', ',',
+  ];
+
+  /// The one-row toolbar ([kCompactEditorToolbar]): Tab on the left, a "⋯"
+  /// menu with the less used tools on the right, and arrows, undo/redo and
+  /// symbol keys scrolling in between.
+  Widget _buildCompactToolbar({
+    required bool codeActionEnabled,
+    required bool inlayHintEnabled,
+    required bool goToDefinitionEnabled,
+    required bool signatureHelpEnabled,
+  }) {
+    final color = appTheme.selectScreenCardTextColor;
+    final disabled = appTheme.editorPageToolColor.withValues(alpha: 0.4);
+    Widget key(Widget child, VoidCallback? onTap, String tooltip) => Tooltip(
+      message: tooltip,
+      child: SizedBox(
+        width: 42,
+        height: 40,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Center(child: child),
+        ),
+      ),
+    );
+    Widget icon(IconData data, VoidCallback onTap, String tooltip) =>
+        key(Icon(data, size: 20, color: color), onTap, tooltip);
+    Widget history(IconData data, bool enabled, VoidCallback onTap, String tooltip) =>
+        key(Icon(data, size: 20, color: enabled ? color : disabled), enabled ? onTap : null, tooltip);
+
+    return Container(
+      height: 40,
+      color: appTheme.editorPageToolbarBg,
+      child: Row(
+        children: [
+          key(
+            SvgPicture.asset(
+              'assets/icons/tab.svg',
+              height: 22,
+              width: 22,
+              colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+            ),
+            _onToolbarTab,
+            'tab',
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  icon(Icons.arrow_back, controller.pressLetfArrowKey, 'left'),
+                  icon(Icons.arrow_upward, controller.pressUpArrowKey, 'up'),
+                  icon(Icons.arrow_downward, controller.pressDownArrowKey, 'down'),
+                  icon(Icons.arrow_forward, controller.pressRightArrowKey, 'right'),
+                  AnimatedBuilder(
+                    animation: undoRedoController,
+                    builder: (context, _) => Row(
+                      children: [
+                        history(Icons.undo, undoRedoController.canUndo, undoRedoController.undo, 'undo'),
+                        history(Icons.redo, undoRedoController.canRedo, undoRedoController.redo, 'redo'),
+                      ],
+                    ),
+                  ),
+                  for (final symbol in _toolbarSymbols)
+                    key(
+                      Text(symbol, style: TextStyle(fontFamily: 'jetBrainsMono', fontSize: 16, color: color)),
+                      () => controller.insertAtCurrentCursor(symbol),
+                      symbol,
+                    ),
+                ],
+              ),
+            ),
+          ),
+          _buildMoreToolsMenu(
+            codeActionEnabled: codeActionEnabled,
+            inlayHintEnabled: inlayHintEnabled,
+            goToDefinitionEnabled: goToDefinitionEnabled,
+            signatureHelpEnabled: signatureHelpEnabled,
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onToolbarTab() {
+    final ghostText = controller.ghostText;
+    if (ghostText != null) {
+      controller.insertText(ghostText.text, ghostText.line, ghostText.column);
+      controller.clearGhostText();
+    } else if (!controller.acceptSuggestionOrNextSnippetStop()) {
+      controller.indent();
+    }
+  }
+
+  Widget _buildMoreToolsMenu({
+    required bool codeActionEnabled,
+    required bool inlayHintEnabled,
+    required bool goToDefinitionEnabled,
+    required bool signatureHelpEnabled,
+  }) {
+    final config = context.read<ConfigBloc>();
+    final softWrap = (config.state.codeForgeConfig['lineWrap'] ?? false) as bool;
+    void zoom(double factor) => config.add(SetFontSize(fontSize: config.state.fontSize * factor));
+    PopupMenuItem<VoidCallback> item(String label, VoidCallback action, {bool enabled = true, bool? checked}) =>
+        PopupMenuItem(
+          value: action,
+          enabled: enabled,
+          height: 40,
+          child: Row(
+            children: [
+              Expanded(child: Text(label)),
+              if (checked != null) Icon(checked ? Icons.check_box : Icons.check_box_outline_blank, size: 18),
+            ],
+          ),
+        );
+    return PopupMenuButton<VoidCallback>(
+      tooltip: 'More tools',
+      icon: Icon(Icons.more_horiz, color: appTheme.selectScreenCardTextColor),
+      onSelected: (action) => action(),
+      itemBuilder: (context) => [
+        item('Zoom in', () => zoom(1.15)),
+        item('Zoom out', () => zoom(0.9)),
+        item('Soft wrap', _toggleSoftWrap, checked: softWrap),
+        const PopupMenuDivider(),
+        item('Code actions', controller.getCodeAction, enabled: codeActionEnabled),
+        item('Go to definition', _goToDefinition, enabled: goToDefinitionEnabled),
+        item('Parameter hints', controller.callSignatureHelp, enabled: signatureHelpEnabled),
+        item(
+          'Inlay hints',
+          () => controller.inlayHintsVisible ? controller.hideInlayHints() : controller.showInlayHints(),
+          enabled: inlayHintEnabled,
+          checked: controller.inlayHintsVisible,
+        ),
+        const PopupMenuDivider(),
+        item('Home', controller.pressHomeKey),
+        item('End', controller.pressEndKey),
+        item('Move line up', controller.moveLineUp),
+        item('Move line down', controller.moveLineDown),
+        item('Duplicate line', controller.duplicateLine),
+        item('Highlight line', _toggleLineHighlight),
+      ],
+    );
+  }
+
+  Future<void> _toggleSoftWrap() async {
+    final config = context.read<ConfigBloc>();
+    final updated = Map<String, dynamic>.from(config.state.codeForgeConfig)
+      ..['lineWrap'] = !((config.state.codeForgeConfig['lineWrap'] ?? false) as bool);
+    config.add(ChangeConfigEvent(updated));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString("codeForgeConfig", jsonEncode(updated));
+  }
+
+  void _toggleLineHighlight() {
+    final line = controller.getLineAtOffset(controller.selection.extentOffset);
+
+    if(controller.lineDecorations.any((l) => l.id == line.toString())){
+      final decoratedId = controller.lineDecorations.singleWhere((l) => l.id == line.toString()).id;
+      controller.removeLineDecoration(decoratedId);
+      controller.removeGutterDecoration(decoratedId);
+      return;
+    }
+
+    controller.addLineDecoration(
+      LineDecoration(
+        id: line.toString(),
+        startLine: line,
+        endLine: controller.getLineAtOffset(controller.selection.extentOffset),
+        type: LineDecorationType.background,
+        color: Colors.blue.withAlpha(95)
+      )
+    );
+
+    controller.addGutterDecoration(
+      GutterDecoration(
+        id: line.toString(),
+        startLine: line,
+        endLine: controller.getLineAtOffset(controller.selection.extentOffset),
+        type: GutterDecorationType.dot,
+        color: Colors.blue
+      )
+    );
+  }
+
+  Future<void> _goToDefinition() async {
+    if(controller.lspConfig == null || controller.openedFile == null) return;
+    final cursorOffset = controller.selection.extentOffset.clamp(0, controller.length);
+    final line = controller.getLineAtOffset(cursorOffset);
+    final lineText = controller.getLineText(line);
+    final lineStartOffset = controller.findLineStart(cursorOffset);
+    final character = (cursorOffset - lineStartOffset).clamp(0, lineText.length);
+
+    Map<String, dynamic> def = {};
+    try {
+      def = await controller.lspConfig!.getDefinition(
+        controller.openedFile!,
+        line,
+        character,
+      );
+    } catch (_) {
+      def = {};
+    }
+
+    final String? defFile = def["uri"];
+    if (defFile != null){
+      if(!mounted) return;
+      final defPath = File(Uri.parse(defFile).toFilePath()).absolute.path;
+      if(defPath == controller.openedFile){
+        final int? line = def["range"]?["start"]?["line"];
+        if(line != null){
+          controller.scrollToLine(line);
+        }
+      } else {
+        final int? line = def["range"]?["start"]?["line"];
+        final activeEditorBloc = context.read<ActiveEditorBloc>();
+        final currentState = List<ActiveEditor>.from(
+          activeEditorBloc.state.activeEditors,
+        );
+
+        final existingIndex = currentState.indexWhere(
+          (item) => File(item.file.path).absolute.path == defPath,
+        );
+
+        if (existingIndex >= 0) {
+          for (var i = 0; i < currentState.length; i++) {
+            currentState[i].isActive = i == existingIndex;
+          }
+          activeEditorBloc.add(ActiveEditorEvent(currentState));
+
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final tabController = widget.tabController;
+            if (tabController != null && existingIndex < tabController.length) {
+              tabController.animateTo(existingIndex);
+            }
+            if (line != null) {
+              currentState[existingIndex].controller.scrollToLine(line);
+            }
+          });
+        } else {
+          final targetFile = File(defPath);
+          if (!targetFile.existsSync()) return;
+
+          for (final item in currentState) {
+            item.isActive = false;
+          }
+
+          final lang = languages.firstWhere(
+            (language) => language.extension.contains(
+              path.extension(targetFile.path).replaceFirst(".", ""),
+            ),
+            orElse: () => languages[0],
+          );
+
+          final config = context.read<ConfigBloc>().state.codeForgeConfig;
+          LspConfig? lspConfig;
+          if (config['enableLSP']) {
+            lspConfig = await activeEditorBloc.getOrStartSharedLspConfig(
+              languageId: _lspLanguageIdForPath(lang, targetFile.path),
+              ext: lspServerExtForFilePath(targetFile.path),
+              executable: lang.lspExecutable,
+              args: lang.args ?? [],
+            );
+          }
+
+          final newController = CodeForgeController(lspConfig: lspConfig);
+          await _applyPendingAgenticDiffForFile(newController, targetFile.path);
+          final newEditor = ActiveEditor(
+            file: targetFile,
+            controller: newController,
+            languageDetails: lang,
+            undoRedoController: UndoRedoController(),
+            hscroll: ScrollController(),
+            vscroll: ScrollController(),
+            isActive: true,
+            findController: FindController(newController),
+          );
+
+          currentState.add(newEditor);
+          activeEditorBloc.add(ActiveEditorEvent(currentState));
+
+          final newIndex = currentState.length - 1;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final tabController = widget.tabController;
+            if (tabController != null && newIndex < tabController.length) {
+              tabController.animateTo(newIndex);
+            }
+            if (line != null) {
+              Future.delayed(const Duration(milliseconds: 100), () {
+                if (!mounted) return;
+                newEditor.controller.scrollToLine(line);
+              });
+            }
+          });
+        }
+      }
+    }
   }
 
   @override

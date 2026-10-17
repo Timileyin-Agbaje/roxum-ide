@@ -15,6 +15,10 @@ const homeDir = "$appDir/Home";
 const kLocalModelsEnabled = false;
 const kCopilotEnabled = false;
 const kAppThemeToggleEnabled = false;
+// One-row editor toolbar with symbol keys; the upstream two-row toolbar stays in the code.
+const kCompactEditorToolbar = true;
+// The home screen's downloads (runtimes) and GitHub buttons.
+const kHomeExtraButtonsEnabled = false;
 
 // Folders the file tree doesn't show. node_modules holds the types copied from the VM.
 const kHiddenTreeFolders = {'node_modules', '.roxum-types-tmp'};

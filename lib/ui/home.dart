@@ -436,7 +436,7 @@ class _SelectTypeState extends State<SelectType> with WidgetsBindingObserver {
                 },
                 icon: const Icon(Icons.folder_copy_outlined, size: 30),
               ),
-              Transform.scale(
+              if (kHomeExtraButtonsEnabled) Transform.scale(
                 scale: 0.8,
                 child: BlocBuilder<PackageCatalogCubit, PackageCatalogState>(
                   builder: (context, packageState) {
@@ -676,7 +676,7 @@ class _SelectTypeState extends State<SelectType> with WidgetsBindingObserver {
                 },
                 icon: appThemestate.appTheme.appThemeIcon,
               ),
-              Padding(
+              if (kHomeExtraButtonsEnabled) Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: IconButton(
                   tooltip: l10n.github,
@@ -747,7 +747,7 @@ class _SelectTypeState extends State<SelectType> with WidgetsBindingObserver {
                     l10n.start,
                     style: TextStyle(
                       color: appThemestate.appTheme.selectScreenCardTextColor,
-                      fontSize: 35,
+                      fontSize: 24,
                       fontWeight: appThemestate.appTheme.isDark
                           ? FontWeight.w300
                           : FontWeight.w400,
@@ -1592,7 +1592,7 @@ class _SelectTypeState extends State<SelectType> with WidgetsBindingObserver {
                           fontWeight: appThemestate.appTheme.isDark
                             ? FontWeight.w300
                             : FontWeight.w400,
-                          fontSize: 35,
+                          fontSize: 24,
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -1714,7 +1714,7 @@ class _SelectTypeState extends State<SelectType> with WidgetsBindingObserver {
                                             ),
                                           ),
                                           subtitle: Text(
-                                            rootDir,
+                                            shortStoragePath(rootDir),
                                             style: TextStyle(
                                               color:
                                                 appThemestate.appTheme.isDark
