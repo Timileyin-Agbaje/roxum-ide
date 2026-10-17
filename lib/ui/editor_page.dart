@@ -2971,7 +2971,8 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                               ),
                             ),
                           ),
-                        if (_hasViteProject)
+                        // With kCompactEditorToolbar the preview lives in the Play menu when it is shown.
+                        if (_hasViteProject && !(kCompactEditorToolbar && ((termuxInfo != null && termuxInfo!.isConnected) || context.watch<SSHServersCubit>().state.serverList.isNotEmpty)))
                           IconButton(
                             tooltip: 'Open Vite Preview',
                             onPressed: _isOpeningVitePreview
@@ -3385,6 +3386,23 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                                           ),
                                           child: Text(
                                             "Clean VM copy",
+                                            style: TextStyle(
+                                              color: appTheme.selectScreenCardTextColor,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                      if (kCompactEditorToolbar && _hasViteProject) ...[
+                                        const Divider(height: 1),
+                                        MenuItemButton(
+                                          onPressed: _isOpeningVitePreview ? null : () => _openVitePreview(),
+                                          leadingIcon: Icon(
+                                            Icons.slideshow,
+                                            color: appTheme.selectScreenCardTextColor,
+                                            size: 20,
+                                          ),
+                                          child: Text(
+                                            "Open preview",
                                             style: TextStyle(
                                               color: appTheme.selectScreenCardTextColor,
                                             ),
