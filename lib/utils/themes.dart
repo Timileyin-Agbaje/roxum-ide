@@ -1,7 +1,10 @@
+import 'package:code_forge/code_forge.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:re_highlight/styles/all.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:xterm/xterm.dart';
+import 'vscode_theme.dart';
 
 final Map<String, Map<String, TextStyle>> highlightThemes = builtinAllThemes..removeWhere(
   (k, v) => v['root']?.backgroundColor == null || v['root']?.color == null
@@ -19,7 +22,16 @@ final fonts = [
   'sourceCodePro'
   ];
 
-const String defaultTerminalThemeId = 'classic-green';
+const String defaultTerminalThemeId = cursorDarkThemeId;
+
+/// 13 on phones, 14 on wide screens such as the Fold's inner screen.
+double defaultEditorFontSize() {
+  final view = WidgetsBinding.instance.platformDispatcher.views.first;
+  return view.physicalSize.width / view.devicePixelRatio >= 600 ? 14 : 13;
+}
+
+/// Line height multiplier for code.
+const double editorLineHeight = 1.4;
 
 @immutable
 class TerminalThemePreset {
@@ -102,8 +114,8 @@ const terminalTheme = TerminalTheme(
 );
 
 final Map<String, TerminalThemePreset> terminalThemePresets = {
-  defaultTerminalThemeId: const TerminalThemePreset(
-    id: defaultTerminalThemeId,
+  'classic-green': const TerminalThemePreset(
+    id: 'classic-green',
     name: 'Classic Green',
     theme: terminalTheme,
   ),
@@ -895,3 +907,249 @@ class LightTheme extends AppTheme{
 }
 
 final Map<String, AppTheme> themeMap = {"dark": DarkTheme(), "light": LightTheme()};
+const cursorDarkThemeId = 'cursor-dark';
+const _cursorDarkAsset = 'assets/themes/cursor-dark.json';
+
+/// Cursor's own dark theme, loaded from [_cursorDarkAsset] by [loadCursorDark] before the app starts.
+late final VsCodeTheme cursorDark;
+
+Future<void> loadCursorDark() async {
+  cursorDark = VsCodeTheme.parse(await rootBundle.loadString(_cursorDarkAsset));
+  highlightThemes[cursorDarkThemeId] = cursorDarkHighlightTheme();
+  terminalThemePresets[cursorDarkThemeId] = TerminalThemePreset(
+    id: cursorDarkThemeId,
+    name: 'Cursor Dark',
+    theme: _cursorTerminalTheme(),
+  );
+}
+
+final _cursorHighlightCache = <String, Map<String, TextStyle>>{};
+
+/// The Cursor Dark editor theme for a file extension such as `.tsx`. Scopes get the
+/// language's TextMate suffix so language-specific rules (HTML tags, TS types) apply.
+Map<String, TextStyle> cursorDarkHighlightTheme([String extension = '']) {
+  final language = textMateLanguageFor(extension);
+  return _cursorHighlightCache.putIfAbsent(
+    language?.suffix ?? '',
+    () => highlightThemeFromVsCode(cursorDark, language),
+  );
+}
+
+Color get _cursorBg => cursorDark.color('editor.background', const Color(0xff181818));
+Color get _cursorPanel => cursorDark.color('sideBar.background', const Color(0xff141414));
+Color get _cursorFg => cursorDark.color('editor.foreground', const Color(0xebe4e4e4));
+Color get _cursorMutedFg => cursorDark.color('activityBar.foreground', const Color(0x8de4e4e4));
+
+TerminalTheme _cursorTerminalTheme() {
+  Color c(String key, Color fallback) => cursorDark.color('terminal.$key', fallback);
+  final background = c('background', _cursorPanel);
+  final foreground = c('foreground', _cursorFg);
+  return TerminalTheme(
+    cursor: cursorDark.color('terminalCursor.foreground', foreground),
+    selection: c('selectionBackground', foreground.withValues(alpha: 0.2)),
+    foreground: foreground,
+    background: background,
+    black: c('ansiBlack', const Color(0xff242424)),
+    red: c('ansiRed', const Color(0xfffc6b83)),
+    green: c('ansiGreen', const Color(0xff3fa266)),
+    yellow: c('ansiYellow', const Color(0xffd2943e)),
+    blue: c('ansiBlue', const Color(0xff81a1c1)),
+    magenta: c('ansiMagenta', const Color(0xffb48ead)),
+    cyan: c('ansiCyan', const Color(0xff88c0d0)),
+    white: c('ansiWhite', const Color(0xffe4e4e4)),
+    brightBlack: c('ansiBrightBlack', const Color(0x42e4e4e4)),
+    brightRed: c('ansiBrightRed', const Color(0xfffc6b83)),
+    brightGreen: c('ansiBrightGreen', const Color(0xff70b489)),
+    brightYellow: c('ansiBrightYellow', const Color(0xfff1b467)),
+    brightBlue: c('ansiBrightBlue', const Color(0xff87a6c4)),
+    brightMagenta: c('ansiBrightMagenta', const Color(0xffb48ead)),
+    brightCyan: c('ansiBrightCyan', const Color(0xff88c0d0)),
+    brightWhite: c('ansiBrightWhite', const Color(0xffe4e4e4)),
+    searchHitBackground: cursorDark.color('editor.findMatchHighlightBackground', const Color(0x4488c0d0)),
+    searchHitBackgroundCurrent: cursorDark.color('editor.findMatchBackground', const Color(0x6688c0d0)),
+    searchHitForeground: foreground,
+  );
+}
+
+/// Popup styles for the editor's completion list and hover card.
+SuggestionStyle cursorSuggestionStyle(double fontSize) {
+  final background = cursorDark.color('editorSuggestWidget.background', _cursorPanel);
+  final foreground = cursorDark.color('editorSuggestWidget.foreground', _cursorFg);
+  final border = cursorDark.color('editorSuggestWidget.border', const Color(0x13e4e4e4));
+  Color? token(String scope) => cursorDark.resolve([scope]).foreground;
+  return SuggestionStyle(
+    elevation: 8,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(6),
+      side: BorderSide(color: border),
+    ),
+    backgroundColor: background,
+    focusColor: cursorDark.color('list.focusBackground', const Color(0x1ee4e4e4)),
+    hoverColor: cursorDark.color('list.hoverBackground', const Color(0x11e4e4e4)),
+    splashColor: cursorDark.color('list.hoverBackground', const Color(0x11e4e4e4)),
+    selectedBackgroundColor: cursorDark.color('editorSuggestWidget.selectedBackground', const Color(0xff343434)),
+    borderColor: border,
+    borderWidth: 1,
+    textStyle: TextStyle(color: foreground, fontSize: fontSize),
+    labelTextStyle: TextStyle(color: foreground, fontSize: fontSize),
+    detailTextStyle: TextStyle(color: _cursorMutedFg, fontSize: fontSize * 0.85),
+    typeTextStyle: TextStyle(color: _cursorMutedFg, fontSize: fontSize * 0.9),
+    methodIconColor: token('entity.name.function'),
+    propertyIconColor: token('variable.other.property'),
+    classIconColor: token('entity.name.type.class'),
+    variableIconColor: foreground,
+    keywordIconColor: token('keyword'),
+  );
+}
+
+HoverDetailsStyle cursorHoverStyle(double fontSize) {
+  final foreground = cursorDark.color('editorHoverWidget.foreground', _cursorFg);
+  return HoverDetailsStyle(
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(6),
+      side: BorderSide(color: cursorDark.color('editorHoverWidget.border', const Color(0x26e4e4e4))),
+    ),
+    backgroundColor: cursorDark.color('editorHoverWidget.background', _cursorPanel),
+    focusColor: cursorDark.color('list.focusBackground', const Color(0x1ee4e4e4)),
+    hoverColor: cursorDark.color('list.hoverBackground', const Color(0x11e4e4e4)),
+    splashColor: cursorDark.color('list.hoverBackground', const Color(0x11e4e4e4)),
+    textStyle: TextStyle(color: foreground, fontSize: fontSize),
+  );
+}
+
+GutterStyle cursorGutterStyle() => GutterStyle(
+  backgroundColor: cursorDark.color('editorGutter.background', _cursorBg),
+  activeLineNumberColor: cursorDark.color('editorLineNumber.activeForeground', _cursorFg),
+  inactiveLineNumberColor: cursorDark.color('editorLineNumber.foreground', const Color(0x42e4e4e4)),
+  foldedIconColor: cursorDark.color('editorLineNumber.foreground', const Color(0x42e4e4e4)),
+  unfoldedIconColor: cursorDark.color('editorLineNumber.foreground', const Color(0x42e4e4e4)),
+  errorLineNumberColor: cursorDark.color('editorError.foreground', const Color(0xffe34671)),
+  warningLineNumberColor: cursorDark.color('editorWarning.foreground', const Color(0xfff1b467)),
+);
+
+CodeSelectionStyle cursorSelectionStyle() => CodeSelectionStyle(
+  cursorColor: cursorDark.color('editorCursor.foreground', _cursorFg),
+  selectionColor: cursorDark.color('editor.selectionBackground', const Color(0x99404040)),
+  cursorBubbleColor: cursorDark.color('textLink.foreground', const Color(0xff81a1c1)),
+);
+
+MatchHighlightStyle cursorMatchHighlightStyle() => MatchHighlightStyle(
+  currentMatchStyle: TextStyle(backgroundColor: cursorDark.color('editor.findMatchBackground', const Color(0x6688c0d0))),
+  otherMatchStyle: TextStyle(backgroundColor: cursorDark.color('editor.findMatchHighlightBackground', const Color(0x4488c0d0))),
+);
+
+/// The app is always Cursor Dark; the light/dark switch is hidden ([kAppThemeToggleEnabled]).
+class CursorDarkTheme extends DarkTheme {
+  @override
+  Color get scaffoldBg => _cursorBg;
+  @override
+  Color get selectScreenCardTextColor => _cursorFg;
+  @override
+  Color get selectScreenCardsBg => cursorDark.solid('input.background', _cursorPanel);
+  @override
+  Color get selectScreenDrawerBg => _cursorPanel;
+  @override
+  Color get editorPageToolSelectedColor => _cursorFg;
+  @override
+  Color get editorPageToolSelectedBgColor => cursorDark.solid('list.activeSelectionBackground', _cursorPanel);
+  @override
+  Color get editorPageDrawerBg => _cursorPanel;
+  @override
+  Color get editorPageToolColor => _cursorMutedFg;
+  @override
+  Color get editorPageToolbarBg => cursorDark.color('statusBar.background', _cursorPanel);
+  @override
+  AppBarTheme get appBarTheme => AppBarTheme(
+    backgroundColor: cursorDark.color('titleBar.activeBackground', _cursorPanel),
+    foregroundColor: _cursorFg,
+    surfaceTintColor: Colors.transparent,
+    iconTheme: IconThemeData(color: _cursorMutedFg, size: 32),
+  );
+  @override
+  CardTheme get cardTheme => CardTheme(color: selectScreenCardsBg, surfaceTintColor: Colors.transparent);
+  @override
+  PopupMenuThemeData get popupBtnTheme => PopupMenuThemeData(
+    color: cursorDark.color('menu.background', _cursorPanel),
+    textStyle: TextStyle(color: cursorDark.color('menu.foreground', _cursorFg)),
+    surfaceTintColor: Colors.transparent,
+  );
+  @override
+  ListTileThemeData get tileTheme => ListTileThemeData(
+    titleTextStyle: TextStyle(color: _cursorFg, fontSize: 18),
+    subtitleTextStyle: TextStyle(color: _cursorMutedFg),
+    iconColor: _cursorMutedFg,
+  );
+}
+
+/// Material defaults in Cursor Dark colors, so dialogs, sheets, menus and inputs that
+/// don't set their own colors match the rest of the app.
+ThemeData cursorDarkThemeData(AppTheme appTheme) {
+  final accent = cursorDark.color('button.background', const Color(0xff81a1c1));
+  final border = cursorDark.color('focusBorder', const Color(0x26e4e4e4));
+  final widgetBg = cursorDark.color('editorWidget.background', _cursorPanel);
+  final colorScheme = ColorScheme.dark(
+    primary: accent,
+    onPrimary: cursorDark.color('button.foreground', const Color(0xff191c22)),
+    secondary: cursorDark.color('list.highlightForeground', const Color(0xff88c0d0)),
+    error: cursorDark.color('errorForeground', const Color(0xffe34671)),
+    surface: _cursorBg,
+    onSurface: _cursorFg,
+    surfaceContainerLowest: _cursorPanel,
+    surfaceContainerLow: _cursorPanel,
+    surfaceContainer: widgetBg,
+    surfaceContainerHigh: widgetBg,
+    surfaceContainerHighest: appTheme.selectScreenCardsBg,
+    outline: border,
+    outlineVariant: cursorDark.color('panel.border', const Color(0x13e4e4e4)),
+    surfaceTint: Colors.transparent,
+  );
+  return ThemeData(
+    colorScheme: colorScheme,
+    scaffoldBackgroundColor: appTheme.scaffoldBg,
+    canvasColor: _cursorBg,
+    dividerColor: colorScheme.outlineVariant,
+    appBarTheme: appTheme.appBarTheme,
+    listTileTheme: appTheme.tileTheme,
+    cardTheme: appTheme.cardTheme.data,
+    popupMenuTheme: appTheme.popupBtnTheme,
+    progressIndicatorTheme: ProgressIndicatorThemeData(
+      color: cursorDark.color('progressBar.background', const Color(0xff3fa266)),
+    ),
+    dialogTheme: DialogThemeData(
+      backgroundColor: widgetBg,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8), side: BorderSide(color: border)),
+    ),
+    bottomSheetTheme: BottomSheetThemeData(backgroundColor: widgetBg, surfaceTintColor: Colors.transparent),
+    drawerTheme: DrawerThemeData(backgroundColor: _cursorPanel, surfaceTintColor: Colors.transparent),
+    menuTheme: MenuThemeData(
+      style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(cursorDark.color('menu.background', _cursorPanel)),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+      ),
+    ),
+    snackBarTheme: SnackBarThemeData(
+      backgroundColor: cursorDark.color('notifications.background', _cursorPanel),
+      contentTextStyle: TextStyle(color: cursorDark.color('notifications.foreground', _cursorFg)),
+      actionTextColor: accent,
+    ),
+    tooltipTheme: TooltipThemeData(
+      decoration: BoxDecoration(color: widgetBg, borderRadius: BorderRadius.circular(4), border: Border.all(color: border)),
+      textStyle: TextStyle(color: _cursorFg),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      fillColor: cursorDark.color('input.background', const Color(0x0ae4e4e4)),
+      hintStyle: TextStyle(color: cursorDark.color('input.placeholderForeground', const Color(0x5ee4e4e4))),
+      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: cursorDark.color('input.border', border))),
+      focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: accent)),
+    ),
+    scrollbarTheme: ScrollbarThemeData(
+      thumbColor: WidgetStatePropertyAll(cursorDark.color('scrollbarSlider.background', const Color(0x11e4e4e4))),
+    ),
+    textSelectionTheme: TextSelectionThemeData(
+      cursorColor: cursorDark.color('editorCursor.foreground', _cursorFg),
+      selectionColor: cursorDark.color('editor.selectionBackground', const Color(0x99404040)),
+      selectionHandleColor: accent,
+    ),
+  );
+}

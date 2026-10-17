@@ -578,6 +578,7 @@ class _CodeEditorState extends State<CodeEditor> with AutomaticKeepAliveClientMi
                 builder: (context, aiState) {
                   final ext = path.extension(widget.filePath.path).toLowerCase();
                   final primaryMode = widget.language.language;
+                  final isCursorDark = configState.codeForgeConfig['theme'] == cursorDarkThemeId;
 
                   return CodeForge(
                     tabSize: 2,
@@ -599,18 +600,24 @@ class _CodeEditorState extends State<CodeEditor> with AutomaticKeepAliveClientMi
                     customCodeSnippets: widget.language.customCodeSnippet,
                     filePath: widget.filePath.path,
                     enableGuideLines: (configState.codeForgeConfig['indentLineStatus'] ?? true) as bool,
-                    selectionStyle: CodeSelectionStyle(
+                    selectionStyle: isCursorDark ? cursorSelectionStyle() : CodeSelectionStyle(
                       selectionColor: Colors.blueAccent.withAlpha(80),
                       cursorBubbleColor: Colors.blue,
                     ),
-                    matchHighlightStyle: const MatchHighlightStyle(
+                    gutterStyle: isCursorDark ? cursorGutterStyle() : null,
+                    suggestionStyle: cursorSuggestionStyle(configState.fontSize),
+                    hoverDetailsStyle: cursorHoverStyle(configState.fontSize),
+                    matchHighlightStyle: isCursorDark ? cursorMatchHighlightStyle() : const MatchHighlightStyle(
                       currentMatchStyle: TextStyle(backgroundColor: Color(0xFFFFA726)),
                       otherMatchStyle: TextStyle(backgroundColor: Color(0x55FFFF00)),
                     ),
-                    editorTheme: getMergedHighlightThemes(configState.codeForgeConfig)[configState.codeForgeConfig['theme']],
+                    editorTheme: isCursorDark
+                      ? cursorDarkHighlightTheme(ext)
+                      : getMergedHighlightThemes(configState.codeForgeConfig)[configState.codeForgeConfig['theme']],
                     textStyle: TextStyle(
                       fontFamily: configState.codeForgeConfig['fontFamily'],
                       fontSize: configState.fontSize,
+                      height: editorLineHeight,
                     ),
                     controller: codeController,
                     undoController: widget.undoRedoController,
@@ -1655,7 +1662,7 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
               children: [
                 Container(
                   height: 78,
-                  color: appTheme.isDark
+                  color: appTheme is CursorDarkTheme ? appTheme.editorPageToolbarBg : appTheme.isDark
                     ? const Color.fromARGB(255, 32, 32, 32)
                     : const Color.fromARGB(255, 219, 218, 218),
                   child: Column(
@@ -1829,7 +1836,7 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
                 ),
                 Container(
                   height: 78,
-                  color: appTheme.isDark
+                  color: appTheme is CursorDarkTheme ? appTheme.editorPageToolbarBg : appTheme.isDark
                     ? const Color.fromARGB(255, 32, 32, 32)
                     : const Color.fromARGB(255, 219, 218, 218),
                   child: Column(
@@ -2102,7 +2109,28 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
                                 );
                               }
                             ),
-                          )
+                          ),
+                          Tooltip(
+                            message: "soft wrap",
+                            child: BlocBuilder<ConfigBloc, ConfigState>(
+                              builder: (context, configState) {
+                                final wrapOn = (configState.codeForgeConfig['lineWrap'] ?? false) as bool;
+                                return DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: wrapOn ? appTheme.editorPageToolSelectedBgColor : null,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: bottomTool(appTheme.isDark, Icons.wrap_text, () async {
+                                    final config = Map<String, dynamic>.from(configState.codeForgeConfig)
+                                      ..['lineWrap'] = !wrapOn;
+                                    context.read<ConfigBloc>().add(ChangeConfigEvent(config));
+                                    final prefs = await SharedPreferences.getInstance();
+                                    await prefs.setString("codeForgeConfig", jsonEncode(config));
+                                  }),
+                                );
+                              },
+                            ),
+                          ),
                         ],
                       )
                     ],

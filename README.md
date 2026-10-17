@@ -53,6 +53,10 @@ node -v && tsx --version
 
 `.github/workflows/build-apk.yml` builds a signed universal APK on every push to `playstore-version` (or manually) and publishes it as a GitHub Release. It needs four repository secrets: `KEYSTORE_BASE64` (the keystore, base64-encoded), `KEYSTORE_PASSWORD`, `KEY_ALIAS` and `KEY_PASSWORD`. Every build must use the same keystore, or the APK will not install over the previous one.
 
+### Theme and font
+
+The app, editor and terminal use Cursor Dark ("Cursor Dark Anysphere v0.0.3", colors by [Anysphere](https://cursor.com)). The theme file is the VS Code version from [nexmoe/cursor-themes-for-zed](https://github.com/nexmoe/cursor-themes-for-zed) (MIT), stored unchanged as `assets/themes/cursor-dark.json`; the app reads its colors at start-up. Code is set in [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) (SIL Open Font License 1.1, see `assets/fonts/JetBrainsMono-OFL.txt`).
+
 <a href="https://play.google.com/store/apps/details?id=com.roxum">
   <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="60">
 </a>

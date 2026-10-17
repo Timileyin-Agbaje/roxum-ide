@@ -32,11 +32,12 @@ class StackBloc extends Bloc<StackIndexChange, StackState> {
 class ConfigBloc extends Bloc<UiEvent, ConfigState>{
   final Map<String, dynamic> codeForgeConfig;
   ConfigBloc({
-    required this.codeForgeConfig
+    required this.codeForgeConfig,
+    double fontSize = 15,
   })
     :super(
       ConfigState(
-        fontSize: 15,
+        fontSize: fontSize,
         codeForgeConfig: codeForgeConfig
       )
     ){
