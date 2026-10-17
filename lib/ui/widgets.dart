@@ -579,6 +579,7 @@ class _CodeEditorState extends State<CodeEditor> with AutomaticKeepAliveClientMi
                   final ext = path.extension(widget.filePath.path).toLowerCase();
                   final primaryMode = widget.language.language;
                   final isCursorDark = configState.codeForgeConfig['theme'] == cursorDarkThemeId;
+                  SyntaxHighlighter.semanticStyleResolver = isCursorDark ? cursorSemanticStyle : null;
 
                   return CodeForge(
                     tabSize: 2,

@@ -90,4 +90,51 @@ void main() {
     final html = highlightThemeFromVsCode(theme, textMateLanguageFor('.html'));
     expect(html['tag']!.color, const Color(0xFF87C3FF));
   });
+
+  test(
+    'semantic tokens: most specific selector wins, then TextMate fallbacks',
+    () {
+      final theme = VsCodeTheme.parse('''{
+      "colors": {},
+      "tokenColors": [
+        {"scope": "variable.parameter", "settings": {"foreground": "#111111", "fontStyle": "italic"}},
+        {"scope": "variable.other.constant", "settings": {"foreground": "#222222"}}
+      ],
+      "semanticTokenColors": {
+        "function": "#333333",
+        "function.declaration": {"foreground": "#444444", "fontStyle": "bold"},
+        "*.static": {"fontStyle": "underline"},
+        "variable:javascript": "#555555"
+      }
+    }''');
+      expect(
+        theme.resolveSemantic('function', []).foreground,
+        const Color(0xFF333333),
+      );
+      final declaration = theme.resolveSemantic('function', [
+        'declaration',
+        'async',
+      ]);
+      expect(declaration.foreground, const Color(0xFF444444));
+      expect(declaration.fontStyle, 'bold');
+      expect(
+        theme.resolveSemantic('member', ['static']).fontStyle,
+        'underline',
+      );
+      expect(
+        theme.resolveSemantic('parameter', ['declaration']).fontStyle,
+        'italic',
+      );
+      expect(
+        theme.resolveSemantic('variable', [
+          'readonly',
+        ], 'typescript').foreground,
+        const Color(0xFF222222),
+      );
+      expect(
+        theme.resolveSemantic('variable', [], 'javascript').foreground,
+        const Color(0xFF555555),
+      );
+    },
+  );
 }

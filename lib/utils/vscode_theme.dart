@@ -8,6 +8,10 @@ class VsCodeTheme {
   final Map<String, Color> colors;
   final List<TokenRule> rules;
   final Map<String, dynamic> semanticTokenColors;
+  late final List<_SemanticRule> _semanticRules = [
+    for (final MapEntry(:key, :value) in semanticTokenColors.entries)
+      ?_SemanticRule.parse(key, value),
+  ];
 
   VsCodeTheme({
     required this.name,
@@ -84,6 +88,55 @@ class VsCodeTheme {
       if (foreground != null && fontStyle != null) break;
     }
     return TokenStyle(foreground, fontStyle);
+  }
+
+  /// Style for an LSP semantic token the way VS Code picks it: the best
+  /// matching `semanticTokenColors` rule for each property, then VS Code's
+  /// standard TextMate scopes for that token type and modifiers.
+  TokenStyle resolveSemantic(
+    String type,
+    List<String> modifiers, [
+    String? language,
+  ]) {
+    type = _semanticTypeAliases[type] ?? type;
+    Color? foreground;
+    String? fontStyle;
+    var foregroundScore = -1, fontStyleScore = -1;
+    for (final rule in _semanticRules) {
+      final score = rule.match(type, modifiers, language);
+      if (score < 0) continue;
+      if (rule.foreground != null && score >= foregroundScore) {
+        foreground = rule.foreground;
+        foregroundScore = score;
+      }
+      if (rule.fontStyle != null && score >= fontStyleScore) {
+        fontStyle = rule.fontStyle;
+        fontStyleScore = score;
+      }
+    }
+    if (foreground != null && fontStyle != null) {
+      return TokenStyle(foreground, fontStyle);
+    }
+
+    final fallback = _semanticFallback(type, modifiers);
+    return TokenStyle(
+      foreground ?? fallback?.foreground,
+      fontStyle ?? fallback?.fontStyle,
+    );
+  }
+
+  TokenStyle? _semanticFallback(String type, List<String> modifiers) {
+    final defaults = [
+      for (final d in _semanticDefaults)
+        if (d.type == type && d.modifiers.every(modifiers.contains)) d,
+    ]..sort((a, b) => b.modifiers.length.compareTo(a.modifiers.length));
+    for (final d in defaults) {
+      for (final scope in d.scopes) {
+        final style = resolve([scope]);
+        if (!style.isEmpty) return style;
+      }
+    }
+    return null;
   }
 
   TokenRule? _best(
@@ -312,3 +365,163 @@ Map<String, TextStyle> highlightThemeFromVsCode(
   });
   return result;
 }
+
+/// VS Code's TypeScript extension calls the server's `member` type `method`.
+const _semanticTypeAliases = {'member': 'method'};
+
+/// A `semanticTokenColors` entry: `type.modifier…:language`, `*` for any type.
+class _SemanticRule {
+  final String type;
+  final List<String> modifiers;
+  final String? language;
+  final Color? foreground;
+  final String? fontStyle;
+
+  _SemanticRule(
+    this.type,
+    this.modifiers,
+    this.language,
+    this.foreground,
+    this.fontStyle,
+  );
+
+  static _SemanticRule? parse(String selector, dynamic value) {
+    final selectorAndLanguage = selector.split(':');
+    final parts = selectorAndLanguage.first.split('.');
+    Color? foreground;
+    String? fontStyle;
+    if (value is String) {
+      foreground = parseVsCodeColor(value);
+    } else if (value is Map) {
+      if (value['foreground'] is String) {
+        foreground = parseVsCodeColor(value['foreground']);
+      }
+      if (value['fontStyle'] is String) {
+        fontStyle = value['fontStyle'];
+      } else if (value['bold'] is bool ||
+          value['italic'] is bool ||
+          value['underline'] is bool) {
+        fontStyle = [
+          if (value['bold'] == true) 'bold',
+          if (value['italic'] == true) 'italic',
+          if (value['underline'] == true) 'underline',
+        ].join(' ');
+      }
+    }
+    if (foreground == null && fontStyle == null) return null;
+    final language = selectorAndLanguage.length > 1
+        ? selectorAndLanguage[1]
+        : null;
+    return _SemanticRule(
+      parts.first,
+      parts.skip(1).toList(),
+      language,
+      foreground,
+      fontStyle,
+    );
+  }
+
+  /// VS Code's scoring: language +10, a named type +100, +100 per modifier; -1 if it doesn't apply.
+  int match(
+    String tokenType,
+    List<String> tokenModifiers,
+    String? tokenLanguage,
+  ) {
+    var score = 0;
+    if (language != null) {
+      if (language != tokenLanguage) return -1;
+      score += 10;
+    }
+    if (type != '*') {
+      if (type != tokenType) return -1;
+      score += 100;
+    }
+    if (!modifiers.every(tokenModifiers.contains)) return -1;
+    return score + modifiers.length * 100;
+  }
+}
+
+/// VS Code's built-in fallbacks from semantic token types (and modifiers) to
+/// TextMate scopes, tried in order until the theme styles one.
+class _SemanticDefault {
+  final String type;
+  final List<String> modifiers;
+  final List<String> scopes;
+  const _SemanticDefault(this.type, this.modifiers, this.scopes);
+}
+
+const _semanticDefaults = [
+  _SemanticDefault('comment', [], ['comment']),
+  _SemanticDefault('string', [], ['string']),
+  _SemanticDefault('keyword', [], ['keyword.control']),
+  _SemanticDefault('number', [], ['constant.numeric']),
+  _SemanticDefault('regexp', [], ['constant.regexp']),
+  _SemanticDefault('operator', [], ['keyword.operator']),
+  _SemanticDefault('namespace', [], ['entity.name.namespace']),
+  _SemanticDefault('type', [], ['entity.name.type', 'support.type']),
+  _SemanticDefault('struct', [], ['entity.name.type.struct']),
+  _SemanticDefault('class', [], ['entity.name.type.class', 'support.class']),
+  _SemanticDefault('interface', [], ['entity.name.type.interface']),
+  _SemanticDefault('enum', [], ['entity.name.type.enum']),
+  _SemanticDefault('typeParameter', [], ['entity.name.type.parameter']),
+  _SemanticDefault('function', [], [
+    'entity.name.function',
+    'support.function',
+  ]),
+  _SemanticDefault('method', [], [
+    'entity.name.function.member',
+    'support.function',
+  ]),
+  _SemanticDefault('macro', [], ['entity.name.function.preprocessor']),
+  _SemanticDefault('variable', [], [
+    'variable.other.readwrite',
+    'entity.name.variable',
+  ]),
+  _SemanticDefault('parameter', [], ['variable.parameter']),
+  _SemanticDefault('property', [], ['variable.other.property']),
+  _SemanticDefault('enumMember', [], ['variable.other.enummember']),
+  _SemanticDefault('event', [], ['variable.other.event']),
+  _SemanticDefault('decorator', [], [
+    'entity.name.decorator',
+    'entity.name.function',
+  ]),
+  _SemanticDefault('label', [], ['entity.name.label']),
+  _SemanticDefault('variable', ['readonly'], ['variable.other.constant']),
+  _SemanticDefault(
+    'property',
+    ['readonly'],
+    ['variable.other.constant.property'],
+  ),
+  _SemanticDefault('type', ['defaultLibrary'], ['support.type']),
+  _SemanticDefault('class', ['defaultLibrary'], ['support.class']),
+  _SemanticDefault('interface', ['defaultLibrary'], ['support.class']),
+  _SemanticDefault(
+    'variable',
+    ['defaultLibrary'],
+    ['support.variable', 'support.other.variable'],
+  ),
+  _SemanticDefault(
+    'variable',
+    ['readonly', 'defaultLibrary'],
+    ['support.constant'],
+  ),
+  _SemanticDefault(
+    'property',
+    ['defaultLibrary'],
+    ['support.variable.property'],
+  ),
+  _SemanticDefault(
+    'property',
+    ['readonly', 'defaultLibrary'],
+    ['support.constant.property'],
+  ),
+  _SemanticDefault('function', ['defaultLibrary'], ['support.function']),
+  _SemanticDefault('method', ['defaultLibrary'], ['support.function']),
+];
+
+/// code_forge's language ids for JS and TS, as VS Code names them in theme selectors.
+String? vsCodeLanguageId(String? languageId) => switch (languageId) {
+  'tsx' => 'typescriptreact',
+  'jsx' => 'javascriptreact',
+  _ => languageId,
+};

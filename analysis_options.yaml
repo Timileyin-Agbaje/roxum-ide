@@ -10,3 +10,6 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # Vendored code_forge: its example app and integration driver need their own packages.
+    - packages/code_forge/example/**
+    - packages/code_forge/test_driver/**
