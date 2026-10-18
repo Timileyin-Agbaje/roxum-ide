@@ -2198,7 +2198,13 @@ Future<LspConfig?> startLspServer({
       'LD_LIBRARY_PATH': '${normalizedExt == 'dart' ? '$sharedPath:$libDir' : '$libDir:$runtimeDir/clang:$runtimeDir/node/lib:$sharedPath'}:${Platform.environment['LD_LIBRARY_PATH'] ?? ''}',
       if (normalizedExt == 'dart') 'DART_ROOT': dartRuntimeDir,
       'JAVA_HOME': '$runtimeDir/java-21-openjdk',
+      // Android has no /tmp. Node falls back to it, and typescript-language-server
+      // exits at start-up when realpath('/tmp') fails.
+      'TMPDIR': tempDir,
+      'TMP': tempDir,
+      'TEMP': tempDir,
     };
+    await Directory(tempDir).create(recursive: true);
 
     if (normalizedExt == 'dart') {
       try {
