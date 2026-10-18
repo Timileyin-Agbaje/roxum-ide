@@ -343,6 +343,30 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
     final plan = await VmRunPlan.forFile(widget.rootDir, file.path);
     if (plan == null || !mounted) return plan != null;
 
+    // Fast path: this project's dev server is up and its preview tunnel is
+    // open, so show the preview now and sync in the background (the terminal
+    // stays one tap away).
+    final livePreview = _vmSession.previewUrl;
+    final client = server.client;
+    if (!restart &&
+        plan.isDevServer &&
+        livePreview != null &&
+        _vmSession.server?.id == server.id &&
+        client != null &&
+        !client.isClosed) {
+      unawaited(_vmSession.sync(server, quiet: true).then<void>((_) {}, onError: (_) {}));
+      Navigator.of(context).push(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              WebViewScreen(streamUrl: livePreview),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return SizeTransition(sizeFactor: animation, child: child);
+          },
+        ),
+      );
+      return true;
+    }
+
     switch (await _connectVm(server)) {
       case _VmConnectResult.connected:
         break;
