@@ -19,6 +19,7 @@ Future<void> main() async {
   await migrateSharedStorageRoots();
   await loadCursorDark();
   await loadCompletionRecency();
+  await detectLowMemoryDevice();
   final recent = await getRecent();
   final appTheme = await getAppTheme();
   final codeForgeConfig = await getCodeForgeConfig();

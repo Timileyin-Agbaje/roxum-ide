@@ -34,9 +34,9 @@ Future<void> _until(
   Future<bool> Function() condition, {
   Duration timeout = const Duration(seconds: 20),
 }) async {
-  final started = DateTime.now();
+  final started = Stopwatch()..start();
   while (!await condition()) {
-    if (DateTime.now().difference(started) > timeout) {
+    if (started.elapsed > timeout) {
       fail('Timed out after $timeout');
     }
     await Future.delayed(const Duration(milliseconds: 300));
@@ -394,7 +394,18 @@ setInterval(() => {}, 1000);
       );
       final session = VmSession(project.path);
       addTearDown(session.dispose);
+      // Stop the server even if the test fails, so port 3123 is free next time.
+      addTearDown(() async {
+        if (server.client != null && !server.client!.isClosed) {
+          await _run(server, sync.stopCommand);
+        }
+      });
       await session.sync(server);
+      // No dependencies: mark them installed so npm (and the network) is skipped.
+      await _run(
+        server,
+        'cd ${sync.remoteShellDir} && mkdir -p node_modules && sha1sum package.json > node_modules/.roxum-deps',
+      );
       final plan = (await VmRunPlan.forFile(
         project.path,
         path.join(project.path, 'server.js'),
@@ -409,6 +420,11 @@ setInterval(() => {}, 1000);
         timeout: const Duration(minutes: 2),
       );
       expect(port, 3123, reason: output.toString());
+      expect(await sync.isRunActive(), isTrue);
+      expect(
+        await _run(server, 'timeout 3 ${sync.followLogCommand} || true'),
+        contains('Listening on'),
+      );
       final url = await session.startDevServerTunnel(server, remotePort: port!);
       final before = await _httpGet(url!);
       expect(before, startsWith('pid '));
@@ -425,6 +441,7 @@ setInterval(() => {}, 1000);
       }, timeout: const Duration(seconds: 60));
 
       await _run(server, sync.stopCommand);
+      expect(await sync.isRunActive(), isFalse);
       await _until(
         () async => !session.isDevServerRunning,
         timeout: const Duration(seconds: 30),

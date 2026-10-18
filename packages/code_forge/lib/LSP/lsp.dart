@@ -128,6 +128,31 @@ sealed class LspConfig {
 
   Future<void>? _initialization;
 
+  /// Why the server isn't usable ('not responding', 'stopped', ...), or null
+  /// while it answers. Lets an app show the server's state.
+  final ValueNotifier<String?> problem = ValueNotifier(null);
+
+  /// Waits for a response, giving up after a while so the editor never waits
+  /// forever on a server that died or was killed for memory.
+  @protected
+  Future<Map<String, dynamic>> awaitResponse(
+    String method,
+    Future<Map<String, dynamic>> response,
+  ) async {
+    try {
+      final result = await response.timeout(
+        method == 'initialize'
+            ? const Duration(seconds: 90)
+            : const Duration(seconds: 10),
+      );
+      if (problem.value == 'not responding') problem.value = null;
+      return result;
+    } on TimeoutException {
+      if (problem.value == null) problem.value = 'not responding';
+      rethrow;
+    }
+  }
+
   /// This method is used to initialize the LSP server.
   ///
   /// Safe to call more than once (several editors share one server, and the
@@ -291,7 +316,9 @@ sealed class LspConfig {
       params: {
         'textDocument': {
           'uri': Uri.file(filePath).toString(),
-          'languageId': languageId,
+          // One TypeScript server serves .ts, .tsx, .js and .jsx files.
+          'languageId':
+              _vsCodeLanguageIds[languageIdForFile(filePath)] ?? languageId,
           'version': version,
           'text': text,
         },
@@ -1673,3 +1700,28 @@ class CustomCodeSnippet {
     required this.cursorLocations,
   });
 }
+
+/// code_forge's language id for a JS/TS file by extension, or null.
+String? languageIdForFile(String? filePath) {
+  final lower = filePath?.toLowerCase() ?? '';
+  if (lower.endsWith('.tsx')) return 'tsx';
+  if (lower.endsWith('.jsx')) return 'jsx';
+  if (lower.endsWith('.ts') ||
+      lower.endsWith('.mts') ||
+      lower.endsWith('.cts')) {
+    return 'typescript';
+  }
+  if (lower.endsWith('.js') ||
+      lower.endsWith('.mjs') ||
+      lower.endsWith('.cjs')) {
+    return 'javascript';
+  }
+  return null;
+}
+
+const _vsCodeLanguageIds = {
+  'tsx': 'typescriptreact',
+  'jsx': 'javascriptreact',
+  'typescript': 'typescript',
+  'javascript': 'javascript',
+};

@@ -156,7 +156,11 @@ class ActiveEditorBloc extends Bloc<EditorEvent, ActiveEditorState>{
     required String languageId,
   }) {
     final canonicalWorkspace = Directory(workspacePath).absolute.path;
-    return '${canonicalWorkspace.toLowerCase()}::${languageId.toLowerCase()}';
+    // One TypeScript server serves .ts, .tsx, .js and .jsx (code_forge sends
+    // each document's own language id).
+    final id = languageId.toLowerCase();
+    final serverId = const {'tsx', 'jsx', 'typescript', 'javascript'}.contains(id) ? 'typescript' : id;
+    return '${canonicalWorkspace.toLowerCase()}::$serverId';
   }
 
   Future<LspConfig?> getOrStartSharedLspConfig({
@@ -167,6 +171,10 @@ class ActiveEditorBloc extends Bloc<EditorEvent, ActiveEditorState>{
     LspClientCapabilities? capabilities,
   }) async {
     if (!isLspServerAvailable(ext: ext, executable: executable, args: args)) {
+      return null;
+    }
+    // On 4 GB phones only the TypeScript server runs.
+    if (isLowMemoryDevice && const {'html', 'htm', 'css', 'json'}.contains(ext.toLowerCase())) {
       return null;
     }
 

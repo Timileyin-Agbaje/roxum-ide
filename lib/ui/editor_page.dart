@@ -337,7 +337,9 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
 
   /// Syncs the project to [server] and runs [file] there in an SSH terminal.
   /// Returns false when the file should run on the phone instead.
-  Future<bool> _runOnVm(SSHInfo server, File file) async {
+  /// With [restart] false, a dev server that is already running is reused:
+  /// Play syncs, goes back to its run tab and opens the preview.
+  Future<bool> _runOnVm(SSHInfo server, File file, {bool restart = false}) async {
     final plan = await VmRunPlan.forFile(widget.rootDir, file.path);
     if (plan == null || !mounted) return plan != null;
 
@@ -352,12 +354,19 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
 
     final runId = ++_vmRunCount;
     final sync = _vmSession.syncFor(server);
+    var reuse = false;
     try {
       await _vmSession.sync(server);
-      await _vmSession.stopDevServerTunnel();
-      // End an earlier run of this project so the dev server port is free.
-      await server.client!.run(sync.stopCommand);
-      final command = await sync.prepareRunCommand(plan.body);
+      reuse = plan.isDevServer && !restart && await sync.isRunActive();
+      final String command;
+      if (reuse) {
+        command = sync.followLogCommand;
+      } else {
+        await _vmSession.stopDevServerTunnel();
+        // End an earlier run of this project so the dev server port is free.
+        await server.client!.run(sync.stopCommand);
+        command = await sync.prepareRunCommand(plan.body);
+      }
       if (!mounted) return true;
       Navigator.of(context).push(
         PageRouteBuilder(
@@ -367,6 +376,8 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
             commandToExecuteInSSH: command,
             remoteStopCommand: sync.stopCommand,
             isRun: true,
+            runKey: '${server.id}|${widget.rootDir}',
+            runCommandOnlyInNewSession: reuse,
           ),
           transitionsBuilder: (context, animation, secondaryAnimation, child) {
             return SizeTransition(sizeFactor: animation, child: child);
@@ -385,6 +396,21 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
       return true;
     }
     _vmSession.watchTypes(server, onUpdated: _reloadTypeScriptServers);
+
+    final openPreview = _vmSession.previewUrl;
+    if (!mounted) return true;
+    if (reuse && openPreview != null) {
+      Navigator.of(context).push(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) =>
+              WebViewScreen(streamUrl: openPreview),
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return SizeTransition(sizeFactor: animation, child: child);
+          },
+        ),
+      );
+      return true;
+    }
 
     if (plan.isDevServer) {
       // Vite uses a fixed port; other dev servers are previewed on the port they print.
@@ -3381,6 +3407,28 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                                           ),
                                           child: Text(
                                             "Sync on save",
+                                            style: TextStyle(
+                                              color: appTheme.selectScreenCardTextColor,
+                                            ),
+                                          ),
+                                        ),
+                                        MenuItemButton(
+                                          onPressed: editorState.activeEditors.isEmpty ? null : () {
+                                            final activeEditorForRun = tabController != null && tabController!.index < editorState.activeEditors.length
+                                              ? editorState.activeEditors[tabController!.index]
+                                              : editorState.activeEditors.firstWhere(
+                                                  (item) => item.isActive == true,
+                                                  orElse: () => editorState.activeEditors.first,
+                                                );
+                                            _runOnVm(selectedVm, activeEditorForRun.file, restart: true);
+                                          },
+                                          leadingIcon: Icon(
+                                            Icons.restart_alt,
+                                            color: appTheme.selectScreenCardTextColor,
+                                            size: 20,
+                                          ),
+                                          child: Text(
+                                            "Restart run",
                                             style: TextStyle(
                                               color: appTheme.selectScreenCardTextColor,
                                             ),

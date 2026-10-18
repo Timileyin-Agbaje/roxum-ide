@@ -28,6 +28,13 @@ class SetupTerminal extends StatefulWidget {
   /// Run on the SSH server a few seconds after Stop sends Ctrl+C, to end what Ctrl+C missed.
   final String? remoteStopCommand;
 
+  /// Identifies a project's run tab on a server, so Play reuses it.
+  final String? runKey;
+
+  /// Send [commandToExecuteInSSH] only if a new run tab had to be opened (for
+  /// example following the log of a dev server that is already running).
+  final bool runCommandOnlyInNewSession;
+
   const SetupTerminal({
     super.key,
     required this.projectDir,
@@ -40,6 +47,8 @@ class SetupTerminal extends StatefulWidget {
     this.termuxId,
     this.commandToExecuteInSSH,
     this.remoteStopCommand,
+    this.runKey,
+    this.runCommandOnlyInNewSession = false,
   });
 
   @override
@@ -240,6 +249,12 @@ class TerminalRuntime {
 
   /// The SSH server (VM or Termux) this session runs on; null for the phone.
   SSHInfo? server;
+
+  /// Set on a project's run tab (see [SetupTerminal.runKey]).
+  String? runKey;
+
+  /// Sent once when the SSH shell opens.
+  String? runCommand;
   SSHClient? sshClient;
   String? sshStopCommand;
   String currentInput = '';
@@ -380,7 +395,8 @@ class _SetupTerminalState extends State<SetupTerminal> {
     _sessionBloc = context.read<TerminalSessionBloc>();
     sshServerList = context.read<SSHServersCubit>().state.serverList.where((server) => server.isConnected).toList();
     termuxInfo = context.read<TermuxCubit>().state.termInfo;
-    if (_sessionBloc.state.sessions.isNotEmpty && !widget.isRun) {
+    final hasSessions = _sessionBloc.state.sessions.isNotEmpty;
+    if (hasSessions) {
       for (final meta in _sessionBloc.state.sessions) {
         if (TerminalRuntimeRegistry.instance.has(meta.id) && meta.isRunning) {
           _reattachSession(meta.id);
@@ -388,13 +404,36 @@ class _SetupTerminalState extends State<SetupTerminal> {
           _restoreSession(meta);
         }
       }
-    } else {
+    }
+    if (widget.isRun) {
+      _startRun();
+    } else if (!hasSessions) {
       _bootstrapTerminalPage();
     }
     _loadPathBinaries();
   }
 
-  Future<void> _bootstrapTerminalPage() async {
+  /// Play reuses the project's run tab while its SSH shell is open, else
+  /// opens a new one.
+  Future<void> _startRun() async {
+    final key = widget.runKey;
+    final command = widget.commandToExecuteInSSH;
+    final existing = key == null
+        ? null
+        : TerminalRuntimeRegistry.instance.runtimes.values
+            .where((r) => r.runKey == key && r.sshSession != null)
+            .firstOrNull;
+    if (existing != null) {
+      _sessionBloc.add(SetActiveTerminalSession(existing.sessionId));
+      if (command != null && !widget.runCommandOnlyInNewSession) {
+        existing.write('$command\n');
+      }
+      return;
+    }
+    await _bootstrapTerminalPage(title: 'Run', runKey: key, runCommand: command);
+  }
+
+  Future<void> _bootstrapTerminalPage({String? title, String? runKey, String? runCommand}) async {
     _sharedPath = await NativeChannel.getLibraryPath();
     final workDir = Directory(widget.projectDir);
     if (!workDir.existsSync()) {
@@ -404,7 +443,9 @@ class _SetupTerminalState extends State<SetupTerminal> {
     await _createSession(
       args: widget.args,
       makeActive: true,
-      title: 'Session 1',
+      title: title ?? 'Session 1',
+      runKey: runKey,
+      runCommand: runCommand,
       externalServer: ((){
         final sshId = widget.sshId;
         final termuxId = widget.termuxId;
@@ -436,7 +477,8 @@ class _SetupTerminalState extends State<SetupTerminal> {
       });
     }
     if (hasSelection != _hasSelection) {
-      _hasSelection = hasSelection;
+      // Rebuild so the terminal turns read-only (no keyboard) while selecting.
+      setState(() => _hasSelection = hasSelection);
       if (hasSelection) {
         _showSelectionToolbar();
       } else {
@@ -463,7 +505,9 @@ class _SetupTerminalState extends State<SetupTerminal> {
     bool makeActive = true,
     String? title,
     bool showFeedback = false,
-    SSHInfo? externalServer
+    SSHInfo? externalServer,
+    String? runKey,
+    String? runCommand,
   }) async {
     final sessionRuntimes = TerminalRuntimeRegistry.instance.runtimes;
     final id = DateTime.now().microsecondsSinceEpoch.toString();
@@ -475,6 +519,9 @@ class _SetupTerminalState extends State<SetupTerminal> {
       controller: TerminalController(selectionMode: SelectionMode.block),
     );
 
+    runtime
+      ..runKey = runKey
+      ..runCommand = runCommand;
     runtime.selectionListener = () => _onSelectionChanged(id);
     runtime.controller.addListener(runtime.selectionListener!);
     sessionRuntimes[id] = runtime;
@@ -721,8 +768,10 @@ class _SetupTerminalState extends State<SetupTerminal> {
         session.write(utf8.encode("cd ${widget.projectDir}\n"));
       }
       
-      if(widget.commandToExecuteInSSH != null){
-        session.write(utf8.encode("${widget.commandToExecuteInSSH}\n"));
+      final runCommand = runtime.runCommand;
+      runtime.runCommand = null;
+      if (runCommand != null) {
+        runtime.write('$runCommand\n');
       }
 
       terminal.onOutput = (data) {
@@ -1581,7 +1630,9 @@ class _SetupTerminalState extends State<SetupTerminal> {
                         Expanded(
                           child: TerminalView(
                             activeRuntime.terminal,
-                            readOnly: widget.readOnly,
+                            // While text is selected, taps must not open the keyboard: it
+                            // resizes the terminal and clears the selection.
+                            readOnly: widget.readOnly || _hasSelection,
                             padding: EdgeInsets.zero,
                             controller: activeRuntime.controller,
                             autofocus: true,
@@ -1769,6 +1820,16 @@ class _SetupTerminalState extends State<SetupTerminal> {
                     tooltip: 'More',
                     onSelected: (action) => action(),
                     itemBuilder: (context) => [
+                      PopupMenuItem(
+                        value: () {
+                          if (activeRuntime == null) return;
+                          FocusManager.instance.primaryFocus?.unfocus();
+                          Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => TerminalTextScreen(runtime: activeRuntime),
+                          ));
+                        },
+                        child: const Text('Select text'),
+                      ),
                       PopupMenuItem(value: () => _copyText(activeRuntime?.lastOutput), child: const Text('Copy last output')),
                       PopupMenuItem(value: () => _copyText(activeRuntime?.allText), child: const Text('Copy all')),
                       const PopupMenuDivider(),
@@ -1915,6 +1976,52 @@ class _TerminalKeyboardMenuState extends State<TerminalKeyboardMenu> {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The session's text (scrollback included) as plain, selectable text, with
+/// no keyboard: the reliable way to copy on a phone.
+class TerminalTextScreen extends StatelessWidget {
+  final TerminalRuntime runtime;
+
+  /// More than this many lines makes selection sluggish on small phones.
+  static const maxLines = 3000;
+
+  const TerminalTextScreen({super.key, required this.runtime});
+
+  void _copy(BuildContext context, String? text) {
+    final messenger = ScaffoldMessenger.of(context);
+    if (text == null || text.trim().isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('Nothing to copy'), duration: Duration(seconds: 1)));
+      return;
+    }
+    Clipboard.setData(ClipboardData(text: text));
+    messenger.showSnackBar(const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final all = runtime.allText;
+    final lines = all.split('\n');
+    final shown = lines.length > maxLines ? lines.sublist(lines.length - maxLines).join('\n') : all;
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Select text'),
+        actions: [
+          TextButton(onPressed: () => _copy(context, runtime.lastOutput), child: const Text('Last output')),
+          TextButton(onPressed: () => _copy(context, all), child: const Text('Copy all')),
+        ],
+      ),
+      body: SingleChildScrollView(
+        reverse: true,
+        padding: const EdgeInsets.all(8),
+        child: SelectableText(
+          shown,
+          style: TextStyle(fontFamily: 'jetBrainsMono', fontSize: 12, color: scheme.onSurface, height: 1.3),
+        ),
       ),
     );
   }

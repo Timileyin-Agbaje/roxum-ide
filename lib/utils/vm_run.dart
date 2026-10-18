@@ -309,6 +309,21 @@ class VmProjectSync {
   /// The dev server's output on the VM (see [VmRunPlan.detached]).
   String get logFile => '"\$HOME"/.roxum/run-$projectKey.log';
 
+  /// Shows a running dev server's recent output and follows it until it stops.
+  String get followLogCommand =>
+      'tail -n 100 --pid="\$(cat $_pidFile)" -f $logFile';
+
+  /// Whether this project's run (for example its dev server) is still going.
+  Future<bool> isRunActive() async {
+    final client = server.client;
+    if (client == null || client.isClosed) return false;
+    final out = await client.run(
+      'f=$_pidFile; [ -s "\$f" ] && kill -0 -- -"\$(cat "\$f")" 2>/dev/null && echo running',
+      stderr: false,
+    );
+    return utf8.decode(out).contains('running');
+  }
+
   /// Ends this project's run on the VM: the whole process group started by the run script.
   String get stopCommand =>
       'f=$_pidFile; if [ -f "\$f" ]; then pid=\$(cat "\$f"); '
@@ -729,10 +744,10 @@ class VmSession {
     final tunnel = VmPreviewTunnel(client, remotePort: remotePort);
     _tunnel = tunnel;
 
-    final started = DateTime.now();
+    final started = Stopwatch()..start();
     while (!_disposed && identical(_tunnel, tunnel)) {
       if (await tunnel.isRemoteListening()) break;
-      if (client.isClosed || DateTime.now().difference(started) > timeout) {
+      if (client.isClosed || started.elapsed > timeout) {
         await stopDevServerTunnel();
         return null;
       }
@@ -759,17 +774,33 @@ class VmSession {
     // Close the tunnel once the dev server stops; if SSH drops (network
     // change), reconnect and keep the same preview URL.
     var busy = false;
+    var unanswered = 0;
     _watchTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
       if (!identical(_tunnel, tunnel) || busy) return;
       busy = true;
       try {
-        if (!tunnel.client.isClosed && await tunnel.isRemoteListening()) return;
-        if (!tunnel.client.isClosed && await _isAlive(tunnel.client)) {
-          await stopDevServerTunnel();
-          return;
+        final client = tunnel.client;
+        if (!client.isClosed) {
+          if (await tunnel.isRemoteListening()) {
+            unanswered = 0;
+            return;
+          }
+          if (!identical(_tunnel, tunnel)) return;
+          if (await _isAlive(client)) {
+            // The connection answers but the dev server doesn't: it stopped.
+            if (identical(_tunnel, tunnel)) await stopDevServerTunnel();
+            return;
+          }
+          // The connection is shared with the VM terminals, so one slow
+          // moment must not cut it. Several unanswered checks in a row (a
+          // network change can leave it hanging) mean it is dead.
+          if (++unanswered < 3) return;
+          client.close();
         }
-        tunnel.client.close();
-        if (!await _reconnect(server, tunnel)) await stopDevServerTunnel();
+        unanswered = 0;
+        if (!await _reconnect(server, tunnel) && identical(_tunnel, tunnel)) {
+          await stopDevServerTunnel();
+        }
       } finally {
         busy = false;
       }
@@ -777,9 +808,10 @@ class VmSession {
     return previewUrl;
   }
 
+  /// SSH keepalive ping: needs no session channel (servers limit those).
   static Future<bool> _isAlive(SSHClient client) async {
     try {
-      await client.run('true').timeout(const Duration(seconds: 5));
+      await client.ping().timeout(const Duration(seconds: 5));
       return true;
     } catch (_) {
       return false;
@@ -819,8 +851,8 @@ class VmSession {
     Duration timeout = const Duration(minutes: 5),
   }) async {
     final log = syncFor(server).logFile;
-    final started = DateTime.now();
-    while (!_disposed && DateTime.now().difference(started) < timeout) {
+    final started = Stopwatch()..start();
+    while (!_disposed && started.elapsed < timeout) {
       final client = server.client;
       if (client == null || client.isClosed) return null;
       try {
@@ -847,7 +879,7 @@ class VmSession {
     _typesTimer?.cancel();
     final watch = ++_typesWatch;
     final types = VmTypesSync(syncFor(server));
-    final started = DateTime.now();
+    final started = Stopwatch()..start();
     var busy = false;
     Future<void> check() async {
       if (busy || _disposed || watch != _typesWatch) return;
@@ -868,7 +900,7 @@ class VmSession {
           _setStatus(VmStatus('Package types copied from ${server.name}'),
               clearAfter: const Duration(seconds: 3));
           onUpdated();
-        } else if (DateTime.now().difference(started) > timeout) {
+        } else if (started.elapsed > timeout) {
           _typesTimer?.cancel();
         }
       } catch (e) {
