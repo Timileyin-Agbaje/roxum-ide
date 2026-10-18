@@ -182,7 +182,11 @@ class LspStdioConfig extends LspConfig {
     unawaited(
       _process.exitCode.then((code) => problem.value = 'stopped (exit $code)'),
     );
-    _process.stderr.listen((data) => debugPrint(utf8.decode(data)));
+    _process.stderr.listen((data) {
+      final text = utf8.decode(data, allowMalformed: true);
+      debugPrint(text);
+      noteServerOutput(text);
+    });
   }
 
   int get pid => _process.pid;

@@ -376,6 +376,33 @@ setInterval(() => {}, 1000);
     skip: skip,
   );
 
+  test('uploads just the saved files, creating folders when needed', () async {
+    await write('a.js', 'a1');
+    await sync.sync();
+    await write('a.js', 'a2');
+    await write('new/deep/b.js', 'b');
+    await write('node_modules/x.js', 'x');
+    final uploaded = await sync.uploadFiles({
+      path.join(project.path, 'a.js'),
+      path.join(project.path, 'new', 'deep', 'b.js'),
+      path.join(project.path, 'node_modules', 'x.js'),
+    });
+    expect(uploaded, 2);
+    expect(
+      await _run(server, 'cat ${remote('a.js')} ${remote('new/deep/b.js')}'),
+      'a2b',
+    );
+    expect(
+      await _run(
+        server,
+        'ls ${sync.remoteShellDir}/node_modules 2>/dev/null || true',
+      ),
+      isEmpty,
+    );
+    // The manifest knows about them, so a full sync has nothing left to do.
+    expect((await sync.sync()).uploaded, 0);
+  }, skip: skip);
+
   test(
     'other dev servers: preview on the printed port, survive a dropped connection',
     () async {

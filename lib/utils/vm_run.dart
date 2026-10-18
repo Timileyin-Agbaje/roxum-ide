@@ -280,6 +280,58 @@ class VmProjectSync {
     }
   }
 
+  /// Uploads just these files (absolute paths), without scanning the project:
+  /// the quick path for saves while a dev server runs. Deletes and anything
+  /// else wait for the next full [sync].
+  Future<int> uploadFiles(Set<String> files) async {
+    final client = server.client;
+    if (client == null || client.isClosed) {
+      throw Exception('Not connected to ${server.name}');
+    }
+    final targets = <String, File>{
+      for (final file in files)
+        if (path.isWithin(rootDir, file) && !isExcluded(path.relative(file, from: rootDir)))
+          path.relative(file, from: rootDir): File(file),
+    };
+    if (targets.isEmpty) return 0;
+    final manifest = await _loadManifest();
+    final sftp = await client.sftp();
+    var uploaded = 0;
+    try {
+      final home = await sftp.absolute('.');
+      final remoteRoot = path.posix.join(home, remoteRelativeDir);
+      final knownDirs = <String>{home};
+      for (var dir = home; path.posix.dirname(dir) != dir; dir = path.posix.dirname(dir)) {
+        knownDirs.add(path.posix.dirname(dir));
+      }
+      final mode = SftpFileOpenMode.create | SftpFileOpenMode.truncate | SftpFileOpenMode.write;
+      for (final MapEntry(key: relative, value: file) in targets.entries) {
+        if (!await file.exists()) continue;
+        final remotePath = path.posix.join(remoteRoot, path.split(relative).join('/'));
+        final stat = await file.stat();
+        // Folders almost always exist: only create them if the write fails.
+        SftpFile remote;
+        try {
+          remote = await sftp.open(remotePath, mode: mode);
+        } on SftpStatusError catch (_) {
+          await _mkdirs(sftp, path.posix.dirname(remotePath), knownDirs);
+          remote = await sftp.open(remotePath, mode: mode);
+        }
+        try {
+          await remote.writeBytes(await file.readAsBytes());
+        } finally {
+          await remote.close();
+        }
+        manifest[relative] = [stat.size, stat.modified.millisecondsSinceEpoch];
+        uploaded++;
+      }
+    } finally {
+      await _saveManifest(manifest);
+      sftp.close();
+    }
+    return uploaded;
+  }
+
   /// Removes folders left empty by a deletion, up to (not including) [root].
   Future<void> _removeEmptyParents(SftpClient sftp, String dir, String root) async {
     while (dir != root && path.posix.isWithin(root, dir)) {
@@ -765,8 +817,15 @@ class VmSession {
         _saveDebounce = Timer(const Duration(milliseconds: 300), () {
           final saved = Set<String>.of(_savedSinceSync);
           _savedSinceSync.clear();
-          sync(server, quiet: true, force: saved)
-              .catchError((_) => const VmSyncResult(uploaded: 0, unchanged: 0));
+          // Only the saved files: no project scan, so hot reload is quick.
+          _syncChain = _syncChain.catchError((_) {}).then((_) async {
+            try {
+              await syncFor(server).uploadFiles(saved);
+            } catch (e) {
+              _setStatus(VmStatus('Sync failed: $e', isError: true),
+                  clearAfter: const Duration(seconds: 8));
+            }
+          });
         });
       });
     }

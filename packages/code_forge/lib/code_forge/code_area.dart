@@ -3191,7 +3191,25 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                     _getSuggestionCacheKey(
                                                       item,
                                                     );
-                                                if (!_suggestionDetailsCache
+                                                // In-app suggestions have no documentation to fetch.
+                                                if (item.completionItem['localOnly'] ==
+                                                    true) {
+                                                  if (_selectedSuggestionMd !=
+                                                      null) {
+                                                    WidgetsBinding.instance
+                                                        .addPostFrameCallback((
+                                                          _,
+                                                        ) {
+                                                          if (mounted) {
+                                                            setState(
+                                                              () =>
+                                                                  _selectedSuggestionMd =
+                                                                      null,
+                                                            );
+                                                          }
+                                                        });
+                                                  }
+                                                } else if (!_suggestionDetailsCache
                                                         .containsKey(key) &&
                                                     _controller.lspConfig !=
                                                         null &&
@@ -3205,25 +3223,31 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                               .resolveCompletion(
                                                                 item,
                                                               );
+                                                      final doc =
+                                                          data['documentation'];
+                                                      final docText =
+                                                          doc is Map &&
+                                                              doc.containsKey(
+                                                                'value',
+                                                              )
+                                                          ? '${doc['value']}'
+                                                          : (doc is String
+                                                                ? doc
+                                                                : '');
+                                                      // Only real documentation opens the panel; a bare
+                                                      // detail line would just cover the list.
                                                       final mdText =
-                                                          "${data['detail'] ?? ''}\n${(() {
-                                                            final doc = data['documentation'];
-                                                            if (doc == null) {
-                                                              return '';
-                                                            }
-
-                                                            if (doc is Map<String, dynamic> && doc.containsKey('value')) {
-                                                              return doc['value'];
-                                                            }
-
-                                                            return doc;
-                                                          })()}";
+                                                          docText.trim().isEmpty
+                                                          ? ''
+                                                          : "${data['detail'] ?? ''}\n$docText";
                                                       if (!mounted) return;
                                                       setState(() {
                                                         _suggestionDetailsCache[key] =
                                                             mdText;
                                                         _selectedSuggestionMd =
-                                                            mdText;
+                                                            mdText.isEmpty
+                                                            ? null
+                                                            : mdText;
                                                       });
                                                     } catch (e) {
                                                       debugPrint(
@@ -3236,8 +3260,13 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                   })();
                                                 } else if (_suggestionDetailsCache
                                                     .containsKey(key)) {
-                                                  final cached =
+                                                  final cachedText =
                                                       _suggestionDetailsCache[key];
+                                                  final cached =
+                                                      cachedText == null ||
+                                                          cachedText.isEmpty
+                                                      ? null
+                                                      : cachedText;
                                                   if (_selectedSuggestionMd !=
                                                       cached) {
                                                     WidgetsBinding.instance
