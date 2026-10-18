@@ -67,9 +67,12 @@ class LspSocketConfig extends LspConfig {
 
     _channel.sink.add(jsonEncode(request));
 
-    return await _responseController.stream.firstWhere(
-      (response) => response['id'] == id,
-      orElse: () => throw TimeoutException('No response for request $id'),
+    return await awaitResponse(
+      method,
+      _responseController.stream.firstWhere(
+        (response) => response['id'] == id,
+        orElse: () => throw TimeoutException('No response for request $id'),
+      ),
     );
   }
 

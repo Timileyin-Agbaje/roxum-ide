@@ -58,7 +58,6 @@ class CodeForgeController implements DeltaTextInputClient {
   String? _lastTypedCharacter;
   String _imeProjectionText = '', _previousValue = "";
   TextSelection? _lastSentSelection;
-  TextSelection _prevSelection = const TextSelection.collapsed(offset: 0);
   TextSelection _imeProjectionSelection = const TextSelection.collapsed(
     offset: 0,
   );
@@ -305,7 +304,6 @@ class CodeForgeController implements DeltaTextInputClient {
             _wordCache = await _extractWords();
           }
           _previousValue = text;
-          _prevSelection = selection;
 
           final cursorPosition = selection.extentOffset;
           final prefix = getCurrentWordPrefix(text, cursorPosition);
@@ -348,8 +346,9 @@ class CodeForgeController implements DeltaTextInputClient {
         });
       });
     }
-    // Works without a language server.
+    // Work without a language server.
     _listeners.add(_autoCloseTagListener);
+    _listeners.add(_completionListener);
   }
 
   Future<void> _openDocumentInLsp({String? previousFile}) async {
@@ -381,29 +380,6 @@ class CodeForgeController implements DeltaTextInputClient {
   Future<void> _highlightListener() async {
     if (text != _previousValue && _lspReady) {
       final currentText = text;
-      final currentSelection = selection;
-      final grewBy = currentText.length - _previousValue.length;
-      final cursor = currentSelection.extentOffset;
-      // Typing a quote or bracket also inserts its closing pair.
-      final isTypingLenMatch =
-          _isTyping &&
-          cursor == _prevSelection.extentOffset + 1 &&
-          (grewBy == 1 ||
-              (grewBy == 2 && _isAutoClosedPair(currentText, cursor)));
-      final isBackspace =
-          currentText.length == _previousValue.length - 1 &&
-          currentSelection.extentOffset == _prevSelection.extentOffset - 1;
-
-      // Completions are handled right away; only the heavier refreshes below
-      // wait for typing to pause.
-      if (isTypingLenMatch) {
-        _onCharacterTyped(currentText, currentSelection.extentOffset);
-      } else if (isBackspace) {
-        _onBackspace(currentText, currentSelection.extentOffset);
-      } else {
-        _cancelCompletions();
-      }
-
       _lspTypingTimer?.cancel();
       _lspTypingTimer = Timer(_lspTypingDebounce, () async {
         if (_isDisposed || !_lspReady || openedFile == null) return;
@@ -427,8 +403,12 @@ class CodeForgeController implements DeltaTextInputClient {
       });
     }
     _previousValue = text;
-    _prevSelection = selection;
   }
+
+  /// The language id the editor uses for highlighting this file: by
+  /// extension for JS/TS (one server serves all four), else the server's.
+  String? get documentLanguageId =>
+      languageIdForFile(openedFile) ?? lspConfig?.languageId;
 
   bool get _isMarkupFile {
     final file = openedFile?.toLowerCase() ?? '';
@@ -439,6 +419,34 @@ class CodeForgeController implements DeltaTextInputClient {
   }
 
   int _autoClosePrevLength = 0, _autoClosePrevCursor = 0;
+  int _completionPrevLength = 0, _completionPrevCursor = 0;
+
+  /// Shows suggestions as you type, from the app's own list right away and
+  /// from the language server when it is ready.
+  void _completionListener() {
+    final currentLength = length;
+    final cursor = selection.extentOffset;
+    final grewBy = currentLength - _completionPrevLength;
+    final cursorMoved = cursor - _completionPrevCursor;
+    _completionPrevLength = currentLength;
+    _completionPrevCursor = cursor;
+    if (grewBy == 0 && cursorMoved == 0) return;
+    if (_isDisposed || openedFile == null) return;
+    final currentText = text;
+    // Typing a quote or bracket also inserts its closing pair.
+    final isTyping =
+        _isTyping &&
+        cursorMoved == 1 &&
+        (grewBy == 1 ||
+            (grewBy == 2 && _isAutoClosedPair(currentText, cursor)));
+    if (isTyping) {
+      _onCharacterTyped(currentText, cursor);
+    } else if (grewBy == -1 && cursorMoved == -1) {
+      _onBackspace(currentText, cursor);
+    } else {
+      _cancelCompletions();
+    }
+  }
 
   void _autoCloseTagListener() {
     final currentLength = length;
@@ -490,6 +498,7 @@ class CodeForgeController implements DeltaTextInputClient {
 
     if (_isCompletionTriggerChar(typed)) {
       _cancelCompletions();
+      _showCompletions(const [], '');
       _requestCompletions(
         prefix: '',
         line: line,
@@ -498,6 +507,7 @@ class CodeForgeController implements DeltaTextInputClient {
       );
     } else if (prefix.isNotEmpty && _isIdentChar(typed.codeUnitAt(0))) {
       if (!_refilterCompletions(currentText, cursorPosition)) {
+        _showCompletions(const [], prefix);
         _requestCompletions(prefix: prefix, line: line, character: character);
       }
     } else {
@@ -516,6 +526,7 @@ class CodeForgeController implements DeltaTextInputClient {
     }
     final line = getLineAtOffset(cursorPosition);
     _cancelCompletions();
+    _showCompletions(const [], prefix);
     _requestCompletions(
       prefix: prefix,
       line: line,
@@ -555,11 +566,31 @@ class CodeForgeController implements DeltaTextInputClient {
     return true;
   }
 
+  /// The app's own suggestions for the cursor (keywords, words in the file,
+  /// tags...), merged with the server's. Called on every keystroke, so it
+  /// must be quick.
+  List<LspCompletion> Function(String text, int cursor, String prefix)?
+  localCompletionProvider;
+
   void _showCompletions(List<LspCompletion> items, String prefix) {
     final language = lspConfig?.languageId ?? '';
+    final serverLabels = {for (final item in items) item.label};
+    final cursor = selection.extentOffset;
+    final local =
+        localCompletionProvider?.call(text, cursor, prefix) ?? const [];
+    // After a '.', the server's member list is the real one; local words are
+    // only a stand-in while it is missing.
+    final memberAccess =
+        cursor - prefix.length > 0 && text[cursor - prefix.length - 1] == '.';
     _suggestions = <dynamic>[
       ...rankCompletions([
-        for (final item in [...items, if (prefix.isNotEmpty) ..._snippets])
+        for (final item in [
+          ...items,
+          if (!(memberAccess && items.isNotEmpty))
+            for (final item in local)
+              if (!serverLabels.contains(item.label)) item,
+          if (prefix.isNotEmpty) ..._snippets,
+        ])
           RankInput(
             item: item,
             filterText: _stringField(item, 'filterText') ?? item.label,
@@ -879,12 +910,22 @@ class CodeForgeController implements DeltaTextInputClient {
     await Future<void>.delayed(Duration.zero);
     // The server must see the latest text before it completes at this spot.
     await _flushPendingLspSync();
-    final result = await lspConfig!.getCompletionList(
-      filePath,
-      line,
-      character,
-      triggerCharacter: triggerCharacter,
-    );
+    final ({List<LspCompletion> items, bool isIncomplete}) result;
+    try {
+      result = await lspConfig!.getCompletionList(
+        filePath,
+        line,
+        character,
+        triggerCharacter: triggerCharacter,
+      );
+    } catch (e) {
+      // Timed out or the server died: keep the local list, try again later.
+      if (requestId == _completionRequestId) {
+        _activeCompletionKey = null;
+        _queuedCompletionRequest = null;
+      }
+      return;
+    }
     if (_isDisposed || requestId != _completionRequestId) return;
     // More of the word may have been typed while waiting; if the cursor left
     // the word, the reply is no longer wanted.

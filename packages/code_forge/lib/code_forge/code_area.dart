@@ -1018,7 +1018,13 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
       }
     } catch (e) {
       debugPrint('Error fetching hover content: $e');
-      _hoverContentNotifier.value = {};
+      _hoverContentNotifier.value = e is TimeoutException
+          ? {
+              'diagnostic': '',
+              'severity': 0,
+              'hover': '_The language server is not responding._',
+            }
+          : {};
       final pendingHover = _queuedHoverRequest;
       _queuedHoverRequest = null;
       if (pendingHover != null && mounted) {
@@ -2743,8 +2749,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                 extraLanguages:
                                                     widget.extraLanguages,
                                                 languageId: _controller
-                                                    .lspConfig
-                                                    ?.languageId,
+                                                    .documentLanguageId,
                                                 lspConfig:
                                                     _controller.lspConfig,
                                                 semanticTokens: _semanticTokens,

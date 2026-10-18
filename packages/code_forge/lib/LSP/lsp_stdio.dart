@@ -178,6 +178,10 @@ class LspStdioConfig extends LspConfig {
       workingDirectory: workspacePath,
     );
     _process.stdout.listen(_handleStdoutData);
+    // Android may kill the server for memory; say so instead of waiting.
+    unawaited(
+      _process.exitCode.then((code) => problem.value = 'stopped (exit $code)'),
+    );
     _process.stderr.listen((data) => debugPrint(utf8.decode(data)));
   }
 
@@ -243,7 +247,7 @@ class LspStdioConfig extends LspConfig {
 
     await _sendLspMessage(request);
 
-    return await responseFuture;
+    return await awaitResponse(method, responseFuture);
   }
 
   @override
