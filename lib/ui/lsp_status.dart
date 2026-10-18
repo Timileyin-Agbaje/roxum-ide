@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:code_forge/code_forge.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'downloads.dart';
 
@@ -70,14 +71,52 @@ class _LspStatusLabelState extends State<LspStatusLabel> {
       _Status.notInstalled => 'The TypeScript server needs Node.js and vscode-langservers-extracted. Install them in Downloads. Suggestions from the editor still work meanwhile.',
       _Status.starting => 'The TypeScript server is starting. On a 4 GB phone this can take a little while.',
       _Status.ready => 'The TypeScript server is running: members, types, auto-imports and hints are on.',
-      _Status.notRunning || _Status.problem => 'The TypeScript server is not working (Android may have stopped it to free memory). Close and reopen the project to start it again. Suggestions from the editor keep working.',
+      _Status.notRunning => 'The TypeScript server did not start for this project. Close and reopen the project to try again. Suggestions from the editor keep working.',
+      _Status.problem
+          when (widget.controller.lspConfig?.problem.value ?? '').startsWith(
+            'stopped',
+          ) =>
+        'The TypeScript server quit with an error. Copy the details below and send them so it can be fixed. Suggestions from the editor keep working.',
+      _Status.problem => 'The TypeScript server is not answering (Android may have paused it to free memory). Close and reopen the project to start it again. Suggestions from the editor keep working.',
     };
+    final details =
+        widget.controller.lspConfig?.recentServerOutput.trim() ?? '';
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(_label(status)),
-        content: Text(message),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(message),
+              if (details.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Details',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                SelectableText(
+                  details,
+                  style: const TextStyle(
+                    fontFamily: 'jetBrainsMono',
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
         actions: [
+          if (details.isNotEmpty)
+            TextButton(
+              onPressed: () => Clipboard.setData(
+                ClipboardData(text: '${_label(status)}\n$details'),
+              ),
+              child: const Text('Copy details'),
+            ),
           if (status == _Status.notInstalled)
             TextButton(
               onPressed: () {

@@ -132,6 +132,19 @@ sealed class LspConfig {
   /// while it answers. Lets an app show the server's state.
   final ValueNotifier<String?> problem = ValueNotifier(null);
 
+  final List<String> _serverOutput = [];
+
+  /// The server's last error output (stderr), to show why it failed.
+  String get recentServerOutput => _serverOutput.join('\n');
+
+  /// Keeps [text] (stderr, or error messages the server sends).
+  void noteServerOutput(String text) {
+    _serverOutput.addAll(text.split('\n').where((l) => l.trim().isNotEmpty));
+    if (_serverOutput.length > 40) {
+      _serverOutput.removeRange(0, _serverOutput.length - 40);
+    }
+  }
+
   /// Waits for a response, giving up after a while so the editor never waits
   /// forever on a server that died or was killed for memory.
   @protected

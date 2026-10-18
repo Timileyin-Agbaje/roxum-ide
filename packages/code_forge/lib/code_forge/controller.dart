@@ -184,6 +184,13 @@ class CodeForgeController implements DeltaTextInputClient {
             }
           }
 
+          // Errors the server reports (often just before it quits).
+          if ((data['method'] == 'window/showMessage' ||
+                  data['method'] == 'window/logMessage') &&
+              data['params']?['type'] == 1) {
+            lspConfig!.noteServerOutput('${data['params']['message']}');
+          }
+
           if (data['method'] == 'workspace/configuration') {
             final id = data['id'];
             await lspConfig!.sendResponse(id, [
@@ -637,7 +644,9 @@ class CodeForgeController implements DeltaTextInputClient {
   /// Resolves [item] once (documentation, auto-import edits, ...).
   Future<Map<String, dynamic>> resolveCompletion(LspCompletion item) {
     final config = lspConfig;
-    if (config == null || item.itemType == CompletionItemType.snippet) {
+    if (config == null ||
+        item.itemType == CompletionItemType.snippet ||
+        item.completionItem['localOnly'] == true) {
       return Future.value(item.completionItem);
     }
     return _resolvedCompletions[item] ??= config

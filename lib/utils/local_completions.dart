@@ -656,6 +656,8 @@ class LocalCompletions {
     itemType: _kindTypes[kind]!,
     completionItem: {
       'label': label,
+      // Not from the server: nothing to resolve, no documentation panel.
+      'localOnly': true,
       'detail': _kindDetails[kind],
       'sortText': sortText,
       'insertText': ?insertText,
@@ -687,6 +689,8 @@ class LocalCompletions {
             itemType: _kindTypes[kind]!,
             completionItem: {
               'label': label,
+              // Not from the server: nothing to resolve, no documentation panel.
+              'localOnly': true,
               'detail': _kindDetails[kind],
               'sortText': _listSort,
               'textEdit': {'range': range, 'newText': label},
