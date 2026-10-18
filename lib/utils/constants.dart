@@ -24,3 +24,5 @@ const kHomeExtraButtonsEnabled = false;
 const kHiddenTreeFolders = {'node_modules', '.roxum-types-tmp'};
 // Terminal sessions as tabs with a ⋯ menu (copy output, copy all, zoom) instead of the drawer.
 const kTerminalSessionTabs = true;
+// Upstream's placeholder language server for .tsx/.jsx files (see CodeEditor).
+const kTsxPlaceholderServer = false;

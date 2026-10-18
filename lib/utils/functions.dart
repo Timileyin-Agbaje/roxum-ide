@@ -2063,7 +2063,8 @@ bool isLspServerAvailable({
 /// Completions may be snippets (`fn($1)`, JSX `attr={$1}`) and include auto-imports.
 Future<Map<String, dynamic>> typeScriptInitializationOptions() async {
   return {
-    'tsserver': {'useSyntaxServer': 'auto'},
+    // A syntax server is a second tsserver process: too much for 4 GB.
+    'tsserver': {'useSyntaxServer': isLowMemoryDevice ? 'never' : 'auto'},
     'preferences': {
       'includeCompletionsWithSnippetText': true,
       'includeCompletionsWithInsertText': true,
@@ -2077,6 +2078,16 @@ Future<Map<String, dynamic>> typeScriptInitializationOptions() async {
 
 /// MemTotal of a "4 GB" phone is a little under 4 GiB; 4.5 GiB leaves room for that.
 const _smallDeviceMemoryKb = 4718592;
+
+/// True on phones with 4 GB of RAM or less (set by [detectLowMemoryDevice]).
+/// They run one TypeScript server and no HTML/CSS servers; the in-app
+/// suggestions cover those files.
+bool isLowMemoryDevice = false;
+
+Future<void> detectLowMemoryDevice() async {
+  final kb = await _deviceMemoryKb();
+  isLowMemoryDevice = kb != null && kb <= _smallDeviceMemoryKb;
+}
 
 Future<int?> _deviceMemoryKb() async {
   try {

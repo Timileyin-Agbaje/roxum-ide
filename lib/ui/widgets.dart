@@ -30,6 +30,8 @@ import '../utils/functions.dart';
 import '../utils/languages.dart';
 import '../utils/themes.dart';
 import '../utils/constants.dart';
+import '../utils/local_completions.dart';
+import 'lsp_status.dart';
 
 Directory? _findRepoRoot(File file) {
   try {
@@ -371,7 +373,14 @@ class _CodeEditorState extends State<CodeEditor> with AutomaticKeepAliveClientMi
     super.initState();
     final controller = widget.codeController;
     final ext = path.extension(widget.filePath.path).toLowerCase();
-    if ((ext == '.tsx' || ext == '.jsx') && controller.lspConfig == null) {
+    // Suggestions that need no language server (keywords, words, tags...).
+    if (LocalCompletions.supports(widget.filePath.path)) {
+      controller.localCompletionProvider = LocalCompletions(widget.filePath.path).call;
+    }
+    // Upstream gave .tsx/.jsx a dummy server so the editor knew the language;
+    // code_forge now takes it from the extension, and the dummy made every
+    // request wait forever.
+    if (kTsxPlaceholderServer && (ext == '.tsx' || ext == '.jsx') && controller.lspConfig == null) {
       try {
         controller.lspConfig = LspSocketConfig(
           workspacePath: widget.filePath.parent.path,
@@ -1468,7 +1477,7 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
         ? language.extension[0]
         : path.extension(file.path).replaceFirst('.', '');
     final isLspServerInstalled = isLspServerAvailable(
-      ext: lspExt,
+      ext: lspServerExtForExtension(ext: lspExt),
       executable: language.lspExecutable,
       args: language.args ?? const [],
     );
@@ -1533,6 +1542,13 @@ class _EditorPageState extends State<EditorArea> with AutomaticKeepAliveClientMi
           child: Row(
             mainAxisAlignment: .end,
             children: [
+              if (languageIdForFile(file.path) != null)
+                LspStatusLabel(
+                  controller: controller,
+                  lspEnabled: lspEnabled,
+                  serverInstalled: isLspServerInstalled,
+                  color: appTheme.selectScreenCardTextColor,
+                ),
               if (context.select<ConfigBloc, bool>((bloc) => bloc.state.codeForgeConfig['showCompletionTiming'] == true))
                 ValueListenableBuilder(
                   valueListenable: controller.completionLatency,
