@@ -143,4 +143,39 @@ void main() {
     final same = diffTexts('x', 'x');
     expect((same.start, same.oldEnd, same.inserted), (1, 1, ''));
   });
+
+  test('lines in the requested range without tokens lose stale colors', () {
+    const lines = ['const a = 1;', 'foo(bar);', 'baz();'];
+    SyntaxHighlighter.semanticStyleResolver = (type, modifiers, language) => _a;
+    addTearDown(() => SyntaxHighlighter.semanticStyleResolver = null);
+    final highlighter = SyntaxHighlighter(
+      language: langTypescript,
+      editorTheme: const {'root': TextStyle(color: Color(0xFFFFFFFF))},
+      languageId: 'typescript',
+    );
+    LspSemanticToken token(int line, int start, int length) => LspSemanticToken(
+      line: line,
+      start: start,
+      length: length,
+      typeIndex: 0,
+      modifierBitmask: 0,
+      tokenTypeName: 'function',
+    );
+    highlighter.updateSemanticTokens(
+      [token(1, 0, 3), token(2, 0, 3)],
+      (l) => lines[l],
+      3,
+    );
+    // Line 1 no longer has tokens; line 2 is outside the requested range.
+    highlighter.updateSemanticTokens(
+      [token(0, 6, 1)],
+      (l) => lines[l],
+      3,
+      coveredLines: (start: 0, end: 1),
+    );
+    expect(_layout(highlighter.semanticSpans), {
+      0: ['6-7'],
+      2: ['0-3'],
+    });
+  });
 }

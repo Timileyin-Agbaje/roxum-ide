@@ -95,11 +95,14 @@ class SyntaxHighlighter {
     _semanticMapping = getSemanticMapping(languageId ?? '');
   }
 
+  /// [coveredLines] is the range the tokens were requested for: lines in it
+  /// without tokens lose their old (now stale) colors.
   void updateSemanticTokens(
     List<LspSemanticToken> tokens,
     String Function(int) getLineText,
-    int lineCount,
-  ) {
+    int lineCount, {
+    ({int start, int end})? coveredLines,
+  }) {
     final updatedLineSemanticSpans = <int, List<SemanticWordSpan>>{};
     final lineCache = <int, String>{};
 
@@ -137,6 +140,14 @@ class SyntaxHighlighter {
       spans.sort((a, b) => a.startChar.compareTo(b.startChar));
     }
 
+    if (coveredLines != null) {
+      _lineSemanticSpans.removeWhere(
+        (line, _) =>
+            line >= coveredLines.start &&
+            line <= coveredLines.end &&
+            !updatedLineSemanticSpans.containsKey(line),
+      );
+    }
     for (final entry in updatedLineSemanticSpans.entries) {
       _lineSemanticSpans[entry.key] = entry.value;
     }
