@@ -981,6 +981,7 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
       }
 
       if (_controller.lspConfig != null) {
+        await _controller.flushPendingLspSync();
         hoverMessage = await _controller.lspConfig!.getHover(
           _filePath!,
           line,
@@ -4529,6 +4530,10 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       tokens,
       controller.getLineText,
       controller.lineCount,
+      coveredLines: (
+        start: _lastSemanticTokenRequestStartLine,
+        end: _lastSemanticTokenRequestEndLine,
+      ),
     );
     _paragraphCache.clear();
     _bracketCache.clear();
@@ -4709,11 +4714,19 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
 
     _semanticTokenTimer?.cancel();
     final requestSerial = ++_semanticTokenRequestSerial;
-    _semanticTokenTimer = Timer(const Duration(milliseconds: 180), () async {
+    // Wait for a pause in typing, then make sure the server has the latest
+    // text: colors computed for older text land on the wrong characters and
+    // flash until the next update.
+    _semanticTokenTimer = Timer(const Duration(milliseconds: 350), () async {
       if (_semanticTokenRequestSerial != requestSerial) return;
       if (controller.documentVersion != currentVersion ||
           controller.openedFile != currentFile ||
           !config.isInitialized) {
+        return;
+      }
+      await controller.flushPendingLspSync();
+      if (_semanticTokenRequestSerial != requestSerial ||
+          controller.documentVersion != currentVersion) {
         return;
       }
 

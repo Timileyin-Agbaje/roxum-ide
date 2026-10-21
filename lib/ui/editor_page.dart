@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:code_forge/code_forge.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -1410,6 +1410,25 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
     );
   }
 
+  /// "App.tsx:12:5 Error: message", ready to paste somewhere.
+  String _diagnosticText(ActiveEditor editor, LspErrors diagnostic) {
+    final start = Map<String, dynamic>.from(diagnostic.range['start'] ?? {});
+    final line = ((start['line'] as num?) ?? 0).toInt() + 1;
+    final character = ((start['character'] as num?) ?? 0).toInt() + 1;
+    return '${path.basename(editor.file.path)}:$line:$character '
+        '${_diagnosticSeverityLabel(diagnostic.severity)}: ${diagnostic.message}';
+  }
+
+  void _copyDiagnostics(BuildContext context, String text, {int count = 1}) {
+    Clipboard.setData(ClipboardData(text: text));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(count == 1 ? 'Copied' : 'Copied $count problems'),
+        duration: const Duration(seconds: 1),
+      ));
+  }
+
   void _showDiagnosticDetailsSheet(
     BuildContext actionContext,
     ActiveEditor editor,
@@ -1482,7 +1501,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                               ),
                             ),
                             const SizedBox(height: 6),
-                            Text(
+                            SelectableText(
                               diagnostic.message,
                               style: TextStyle(
                                 color: appTheme.selectScreenCardTextColor,
@@ -1522,6 +1541,15 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => _copyDiagnostics(sheetContext, _diagnosticText(editor, diagnostic)),
+                      icon: const Icon(Icons.copy, size: 18),
+                      label: const Text('Copy'),
                     ),
                   ),
                 ],
@@ -1623,6 +1651,7 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
                     appTheme,
                   );
                 },
+                onLongPress: () => _copyDiagnostics(context, _diagnosticText(editor, diag)),
                 child: Ink(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -1760,13 +1789,29 @@ class _EditorPageState extends State<EditorPage> with TickerProviderStateMixin, 
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
       children: [
-        Text(
-          'DIAGNOSTICS',
-          style: TextStyle(
-            color: appTheme.selectScreenCardTextColor,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.8,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'DIAGNOSTICS',
+                style: TextStyle(
+                  color: appTheme.selectScreenCardTextColor,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ),
+            if (diagnostics.isNotEmpty)
+              TextButton.icon(
+                onPressed: () => _copyDiagnostics(
+                  context,
+                  [for (final diag in [...errors, ...warnings, ...infos]) _diagnosticText(activeEditor, diag)].join('\n'),
+                  count: errors.length + warnings.length + infos.length,
+                ),
+                icon: const Icon(Icons.copy_all, size: 18),
+                label: const Text('Copy all'),
+              ),
+          ],
         ),
         const SizedBox(height: 10),
         Row(

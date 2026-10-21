@@ -5228,6 +5228,10 @@ class CodeForgeController implements DeltaTextInputClient {
     }
   }
 
+  /// Sends pending text changes to the server now, so a request that
+  /// depends on positions (colors, hover) sees the latest text.
+  Future<void> flushPendingLspSync() => _flushPendingLspSync();
+
   Future<void> _flushPendingLspSync() async {
     if (_lspDocumentSyncTimer?.isActive ?? false) {
       _lspDocumentSyncTimer!.cancel();
